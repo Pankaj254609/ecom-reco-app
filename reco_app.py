@@ -7,12 +7,12 @@ from supabase import create_client, Client
 st.set_page_config(page_title="Multi-Brand E-commerce Dashboard", layout="wide")
 st.title("📊 डिज़ाइन-वाइज़, मंथ-वाइज़ और ब्रांड-वाइज़ ओवरऑल समरी डैशबोर्ड")
 
-# --- Direct Supabase Database Connection (No Sidebar Input Needed) ---
+# --- Direct Supabase Database Connection ---
 @st.cache_resource
 def init_supabase() -> Client:
-    # Direct Production Keys (No fallback input boxes anymore)
     url = "https://tpbbngotolgthytgjarp.supabase.co"
-    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRwYmJuZ290b2xndGh5dGdqYXJwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3MzY3NTMsImV4cCI6MjA5OTMxMjc1M30.0uxeXOsMDbAjtAdT_RZlb6NAs-OBlydKr13-lv9l5Lw"
+    # Kripya niche apni naye wale Supabase Dashboard se copy ki hui Anon Key paste karein:
+    key = "YOUR_ACTUAL_NEW_ANON_KEY_HERE"
     return create_client(url, key)
 
 # Safe Initialize Client
@@ -144,7 +144,6 @@ st.sidebar.markdown("## 📤 Sheet Upload & Management")
 # Existing brands load list to avoid typos
 existing_brands = ['TERRADESI']
 if not df_design.empty:
-    # Handle lowercase match for Supabase schema safely
     b_col = 'brand' if 'brand' in df_design.columns else 'Brand'
     if b_col in df_design.columns:
         unique_b = list(df_design[b_col].dropna().unique())
@@ -181,7 +180,7 @@ if uploaded_file is not None and upload_brand != "":
                 df_processed = df_processed.dropna(subset=['DESIGN', 'Month'])
                 df_processed = df_processed[df_processed['DESIGN'].astype(str).str.strip() != '']
                 
-                # --- AUTO-AGGREGATION with Brand column ---
+                # --- AUTO-AGGREGATION ---
                 summary_df = df_processed.groupby(['Month', 'Marketplace', 'Brand', 'DESIGN']).agg({
                     'Sale Amount': 'sum',
                     'Return Amount': 'sum',
@@ -196,12 +195,11 @@ if uploaded_file is not None and upload_brand != "":
                 
                 db_records = summary_df.to_dict(orient='records')
                 
-                # Dynamic lowercase keys for matching database column architecture
                 db_records_clean = []
                 for record in db_records:
                     db_records_clean.append({k.lower().replace(' ', '_'): v for k, v in record.items()})
 
-                # Delete existing data for that specific brand and channel to update freshly
+                # Delete existing data freshly
                 supabase.table("design_wise_summary").delete().eq("marketplace", mp_type).eq("brand", upload_brand).execute()
                 
                 chunk_size = 200
@@ -221,7 +219,6 @@ st.markdown("## 📈 Brand, Marketplace & Month Wise Unified Reports")
 if not df_design.empty:
     df_display = df_design.copy()
     
-    # Map lowercase schema coming from Supabase cleanly
     if 'brand' not in df_display.columns and 'Brand' in df_display.columns:
         df_display = df_display.rename(columns={'Brand': 'brand', 'Month': 'month', 'Marketplace': 'marketplace', 'Design': 'design'})
     
@@ -248,7 +245,7 @@ if not df_design.empty:
     if selected_month != "All": 
         df_final = df_final[df_final['month'] == selected_month]
         
-    # Ensure columns exist and contain numerical float types
+    # Map types correctly
     num_cols = ['sale_amount', 'return_amount', 'marketplace_fee', 'del_qty', 'dto_qty', 'rto_qty', 'actual_qty', 'add_fees', 'settlement_amount']
     for col in num_cols:
         if col in df_final.columns:
@@ -256,7 +253,7 @@ if not df_design.empty:
         else:
             df_final[col] = 0.0
 
-    # UI Column Renaming for display match
+    # UI Column Renaming
     df_ui = df_final.rename(columns={
         'month': 'Month', 'marketplace': 'Marketplace', 'brand': 'Brand', 'design': 'Design',
         'sale_amount': 'Sale Amount', 'return_amount': 'Return Amount',
