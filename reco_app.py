@@ -7,21 +7,36 @@ from supabase import create_client, Client
 st.set_page_config(page_title="Multi-Brand E-commerce Dashboard", layout="wide")
 st.title("📊 डिज़ाइन-वाइज़, मंथ-वाइज़ और ब्रांड-वाइज़ ओवरऑल समरी डैशबोर्ड")
 
-# --- Supabase Database Connection ---
+# --- Supabase Database Connection (With Fallback Input Box) ---
 @st.cache_resource
 def init_supabase() -> Client:
-    url = st.secrets["supabase"]["url"]
-    key = st.secrets["supabase"]["key"]
+    url, key = None, None
+    
+    # 1. Check if Secrets are configured in Streamlit Cloud
+    if "supabase" in st.secrets:
+        url = st.secrets["supabase"].get("url")
+        key = st.secrets["supabase"].get("key")
+        
+    # 2. Fallback: If secrets are missing or failed, show manual fields in Sidebar
+    if not url or not key:
+        st.sidebar.warning("⚠️ Secrets automatically nahi mile! Niche manually details dalein:")
+        url = st.sidebar.text_input("Supabase Project URL:", "https://tpbbngotolgthytgjarp.supabase.co", key="sb_url_manual")
+        key = st.sidebar.text_input("Supabase Anon Key:", type="password", key="sb_key_manual")
+        
+    if not url or not key:
+        st.info("👋 Welcome! Kripya dashboard shuru karne ke liye sidebar mein Supabase Anon Key dalein.")
+        st.stop()
+        
     return create_client(url, key)
 
-# --- Sabse Pehle Supabase Client Initialize Karein (Global Level Par) ---
+# Initialize Client safely
 try:
     supabase = init_supabase()
 except Exception as e:
     st.error(f"Supabase connection initialize karne mein dikkat aayi: {e}")
-    st.stop()  # Agar database connect nahi hua toh code aage nahi chalega aur crash nahi hoga
+    st.stop()
 
-# --- Load Cloud Data (Ab iske upar supabase completely available hai) ---
+# --- Load Cloud Data ---
 @st.cache_data(ttl=600)
 def load_cloud_data():
     try:
