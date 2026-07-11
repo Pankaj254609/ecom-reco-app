@@ -7,41 +7,24 @@ from supabase import create_client, Client
 st.set_page_config(page_title="Multi-Brand E-commerce Dashboard", layout="wide")
 st.title("📊 डिज़ाइन-वाइज़, मंथ-वाइज़ और ब्रांड-वाइज़ ओवरऑल समरी डैशबोर्ड")
 
-# --- Supabase Database Connection (Fixed Cached Widget Warning) ---
+# --- Direct Supabase Database Connection (No Sidebar Input Needed) ---
 @st.cache_resource
-def init_supabase(url: str, key: str) -> Client:
-    """Ye function purely database client initialize karega aur isme koi widget nahi hoga."""
+def init_supabase() -> Client:
+    # Direct Production Keys (No fallback input boxes anymore)
+    url = "https://tpbbngotolgthytgjarp.supabase.co"
+    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRwYmJuZ290b2xndGh5dGdqYXJwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTe4MzczNjc1MywiZXhwIjoyMDk5MzEyNzUzfQ.OuKXzzsjce5J9Ak6_Fu6GQTeK7mz37BCrX21HWG1DF8"
     return create_client(url, key)
 
-# 1. Pehle variables ko empty initialize karein
-url, key = None, None
-
-# 2. Check karein agar Streamlit Cloud local Secrets available hain
-if "supabase" in st.secrets:
-    url = st.secrets["supabase"].get("url")
-    key = st.secrets["supabase"].get("key")
-
-# 3. Fallback: Agar cloud secrets nahi mile, toh widget ko cache function ke BAAHAR sidebar mein chalayein
-if not url or not key:
-    st.sidebar.warning("⚠️ Secrets automatically nahi mile! Niche manually details dalein:")
-    url = st.sidebar.text_input("Supabase Project URL:", "https://tpbbngotolgthytgjarp.supabase.co", key="sb_url_manual")
-    key = st.sidebar.text_input("Supabase Anon Key:", type="password", key="sb_key_manual")
-
-# 4. Agar user ne abhi tak sidebar mein credentials nahi daale hain, toh app ko rokein
-if not url or not key:
-    st.info("👋 Welcome! Kripya dashboard shuru karne ke liye sidebar mein Supabase Anon Key dalein.")
-    st.stop()
-
-# 5. Safe Initialize Client (Pass parameters to cached function)
+# Safe Initialize Client
 try:
-    supabase = init_supabase(url, key)
+    supabase = init_supabase()
 except Exception as e:
     st.error(f"Supabase connection initialize karne mein dikkat aayi: {e}")
     st.stop()
 
 
 # --- Load Cloud Data ---
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=60)
 def load_cloud_data():
     try:
         res = supabase.table("design_wise_summary").select("*").limit(15000).execute()
@@ -160,9 +143,12 @@ st.sidebar.markdown("## 📤 Sheet Upload & Management")
 
 # Existing brands load list to avoid typos
 existing_brands = ['TERRADESI']
-if not df_design.empty and 'brand' in df_design.columns:
-    unique_b = list(df_design['brand'].dropna().unique())
-    if unique_b: existing_brands = unique_b
+if not df_design.empty:
+    # Handle lowercase match for Supabase schema safely
+    b_col = 'brand' if 'brand' in df_design.columns else 'Brand'
+    if b_col in df_design.columns:
+        unique_b = list(df_design[b_col].dropna().unique())
+        if unique_b: existing_brands = unique_b
 
 # 1. Select Brand Name or add new one
 upload_brand_mode = st.sidebar.radio("Brand Select Type:", ["Existing Brand", "Add New Brand"])
@@ -235,6 +221,10 @@ st.markdown("## 📈 Brand, Marketplace & Month Wise Unified Reports")
 if not df_design.empty:
     df_display = df_design.copy()
     
+    # Map lowercase schema coming from Supabase cleanly
+    if 'brand' not in df_display.columns and 'Brand' in df_display.columns:
+        df_display = df_display.rename(columns={'Brand': 'brand', 'Month': 'month', 'Marketplace': 'marketplace', 'Design': 'design'})
+    
     if 'brand' not in df_display.columns:
         df_display['brand'] = 'TERRADESI'
         
@@ -258,8 +248,16 @@ if not df_design.empty:
     if selected_month != "All": 
         df_final = df_final[df_final['month'] == selected_month]
         
-    # UI Column Renaming
-    df_final = df_final.rename(columns={
+    # Ensure columns exist and contain numerical float types
+    num_cols = ['sale_amount', 'return_amount', 'marketplace_fee', 'del_qty', 'dto_qty', 'rto_qty', 'actual_qty', 'add_fees', 'settlement_amount']
+    for col in num_cols:
+        if col in df_final.columns:
+            df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0.0)
+        else:
+            df_final[col] = 0.0
+
+    # UI Column Renaming for display match
+    df_ui = df_final.rename(columns={
         'month': 'Month', 'marketplace': 'Marketplace', 'brand': 'Brand', 'design': 'Design',
         'sale_amount': 'Sale Amount', 'return_amount': 'Return Amount',
         'marketplace_fee': 'Marketplace Fees', 'del_qty': 'DEL QTY',
@@ -270,10 +268,10 @@ if not df_design.empty:
     # KPI Section
     st.markdown(f"### 📊 Quick KPI Summary for **{selected_brand}**")
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("Total Sales", f"₹{df_final['Sale Amount'].sum():,.2f}")
-    kpi2.metric("Total Settlement", f"₹{df_final['Settlement Amount'].sum():,.2f}")
-    kpi3.metric("DEL QTY (Actual)", f"{int(df_final['ACTUAL DEL QTY'].sum()):,} Pcs")
-    kpi4.metric("Total Return QTY", f"{int(df_final['DTO QTY'].sum() + df_final['RTO QTY'].sum()):,} Pcs")
+    kpi1.metric("Total Sales", f"₹{df_ui['Sale Amount'].sum():,.2f}")
+    kpi2.metric("Total Settlement", f"₹{df_ui['Settlement Amount'].sum():,.2f}")
+    kpi3.metric("DEL QTY (Actual)", f"{int(df_ui['ACTUAL DEL QTY'].sum()):,} Pcs")
+    kpi4.metric("Total Return QTY", f"{int(df_ui['DTO QTY'].sum() + df_ui['RTO QTY'].sum()):,} Pcs")
 
     st.write("---")
     
@@ -286,11 +284,11 @@ if not df_design.empty:
         'DEL QTY': '{:,.0f}', 'DTO QTY': '{:,.0f}', 'RTO QTY': '{:,.0f}', 'ACTUAL DEL QTY': '{:,.0f}'
     }
     
-    st.dataframe(df_final.style.format(fmt), use_container_width=True, hide_index=True)
+    st.dataframe(df_ui.style.format(fmt), use_container_width=True, hide_index=True)
     
     st.download_button(
         label=f"📥 Download Report ({selected_brand})",
-        data=df_final.to_csv(index=False).encode('utf-8'),
+        data=df_ui.to_csv(index=False).encode('utf-8'),
         file_name=f'{selected_brand}_Summary_Report.csv',
         mime='text/csv'
     )
