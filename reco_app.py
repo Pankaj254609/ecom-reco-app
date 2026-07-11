@@ -12,7 +12,7 @@ st.title("📊 डिज़ाइन-वाइज़, मंथ-वाइज़ 
 def init_supabase() -> Client:
     url = "https://tpbbngotolgthytgjarp.supabase.co"
     # Kripya niche apni naye wale Supabase Dashboard se copy ki hui Anon Key paste karein:
-    key = "YOUR_ACTUAL_NEW_ANON_KEY_HERE"
+    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRwYmJuZ290b2xndGh5dGdqYXJwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3MzY3NTMsImV4cCI6MjA5OTMxMjc1M30.0uxeXOsMDbAjtAdT_RZlb6NAs-OBlydKr13-lv9l5Lw"
     return create_client(url, key)
 
 # Safe Initialize Client
