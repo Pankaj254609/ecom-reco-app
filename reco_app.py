@@ -1,24 +1,11 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+import numpy as np
 from supabase import create_client, Client
 
-# --- Page Config & Theme ---
-st.set_page_config(page_title="Design-Wise Summary Dashboard", layout="wide")
-st.title("📆 डिज़ाइन-वाइज़ ई-कॉमर्स ओवरऑल समरी डैशबोर्ड")
-
-st.markdown("""
-    <style>
-    .main { background-color: #f8f9fa; }
-    h1, h2, h3 { color: #0f172a; font-family: 'Segoe UI', sans-serif; font-weight: 700; }
-    [data-testid="stSidebar"] { background-color: #1e293b !important; color: #ffffff !important; }
-    [data-testid="stSidebar"] label, [data-testid="stSidebar"] h2 { color: #ffffff !important; }
-    .stButton>button {
-        background-color: #2563eb !important; color: white !important;
-        border-radius: 6px !important; width: 100%; font-weight: 600;
-    }
-    </style>
-""", unsafe_allow_html=True)
+# --- Page Config ---
+st.set_page_config(page_title="E-commerce Unified Dashboard", layout="wide")
+st.title("📊 E-commerce Unified Design & Month-Wise Summary")
 
 # --- Supabase Database Connection ---
 @st.cache_resource
@@ -30,178 +17,214 @@ def init_supabase() -> Client:
 try:
     supabase = init_supabase()
 except Exception as e:
-    st.error("Supabase configuration secrets sahi nahi hain. Kripya st.secrets check karein.")
+    st.error("Supabase configuration secrets sahi nahi hain. Kripya check karein.")
 
-# --- Load Data From Online Cloud Database ---
+# --- Load Cloud Data ---
+@st.cache_data(ttl=600)
 def load_cloud_data():
     try:
-        res = supabase.table("design_wise_summary").select("*").execute()
-        df_cloud = pd.DataFrame(res.data)
-        if not df_cloud.empty:
-            df_cloud = df_cloud.rename(columns={
-                "month": "Month", "marketplace": "Marketplace", "design": "Design",
-                "sale_amount": "Sale Amount", "selling_price": "Selling Price",
-                "marketplace_fee": "Marketplace Fee", "taxes": "Taxes",
-                "protection_fund": "Protection Fund", "refund_rs": "Refund (Rs.)",
-                "gross_sale": "Gross Sale", "del_qty": "DEL", "dto_qty": "DTO", "rto_qty": "RTO",
-                "actual_qty": "Actual", "gst_tcs_credits": "Input GST + TCS Credits",
-                "bank_settlement": "Bank Settlement", "settlement_value_add": "Settlement Value ADD",
-                "final_settled_amt": "Final Settled Amt.", "cost_price": "Cost Price"
-            })
-            return df_cloud
+        res = supabase.table("design_wise_summary").select("*").limit(10000).execute()
+        df = pd.DataFrame(res.data)
+        return df
     except Exception as e:
-        pass
-    return pd.DataFrame()
+        return pd.DataFrame()
 
 df_design = load_cloud_data()
 
-# --- Sidebar Controls ---
-st.sidebar.markdown("<h2>🎯 Data Upload & Filters</h2>", unsafe_allow_html=True)
+# --- Functions to Process Individual Marketplace Sheets ---
+def process_flipkart(df):
+    # Mapping columns
+    df['Month'] = df['Payment Date'].fillna('')
+    df['Marketplace'] = 'FLIPKART'
+    
+    # Status count logic based on Return Type
+    df['DEL_QTY'] = np.where(df['Return Type'].str.upper() == 'DEL', df['Quantity'], 0)
+    df['DTO_QTY'] = np.where(df['Return Type'].str.upper() == 'DTO', df['Quantity'], 0)
+    df['RTO_QTY'] = np.where(df['Return Type'].str.upper() == 'RTO', df['Quantity'], 0)
+    df['ACTUAL_QTY'] = np.where(df['Return Type'].str.upper() == 'DEL', df['Quantity'], 0)
+    
+    # Financial columns
+    df['Sale Amount'] = pd.to_numeric(df['Sale Amount'], errors='coerce').fillna(0)
+    df['Return Amount'] = pd.to_numeric(df['Refund (Rs.)'], errors='coerce').fillna(0)
+    df['Marketplace Fee'] = pd.to_numeric(df['Marketplace Fee'], errors='coerce').fillna(0) + pd.to_numeric(df['Taxes (Rs.)'], errors='coerce').fillna(0)
+    df['ADD_FEES'] = pd.to_numeric(df['Settlement Value ADD'], errors='coerce').fillna(0)
+    df['Settlement Amount'] = pd.to_numeric(df['Bank Settlement'], errors='coerce').fillna(0)
+    
+    return df[['Month', 'Marketplace', 'DESIGN', 'Sale Amount', 'Return Amount', 'Marketplace Fee', 'DEL_QTY', 'DTO_QTY', 'RTO_QTY', 'ACTUAL_QTY', 'ADD_FEES', 'Settlement Amount']]
 
-st.sidebar.subheader("📤 New Sheet Upload")
-uploaded_file = st.sidebar.file_uploader("Excel file upload karein", type=["xlsx"])
+def process_meesho(df):
+    df['Month'] = df['Payment Date'].fillna('')
+    df['Marketplace'] = 'MEESHO'
+    
+    # Status mapping
+    status_col = 'Live Order Status' if 'Live Order Status' in df.columns else 'Status'
+    df['DEL_QTY'] = np.where(df[status_col].str.upper() == 'DEL', df['QTY'], 0)
+    df['DTO_QTY'] = np.where(df[status_col].str.upper() == 'DTO', df['QTY'], 0)
+    df['RTO_QTY'] = np.where(df[status_col].str.upper() == 'RTO', df['QTY'], 0)
+    df['ACTUAL_QTY'] = np.where(df[status_col].str.upper() == 'DEL', df['QTY'], 0)
+    
+    df['Sale Amount'] = pd.to_numeric(df['Total Sale Amount (Incl. Shipping & GST)'], errors='coerce').fillna(0)
+    df['Return Amount'] = pd.to_numeric(df['Total Sale Return Amount'], errors='coerce').fillna(0)
+    df['Marketplace Fee'] = pd.to_numeric(df['total comission'], errors='coerce').fillna(0)
+    df['ADD_FEES'] = pd.to_numeric(df['ADD'], errors='coerce').fillna(0) if 'ADD' in df.columns else 0
+    df['Settlement Amount'] = pd.to_numeric(df['Final Settlement Amount'], errors='coerce').fillna(0)
+    
+    return df[['Month', 'Marketplace', 'DESIGN', 'Sale Amount', 'Return Amount', 'Marketplace Fee', 'DEL_QTY', 'DTO_QTY', 'RTO_QTY', 'ACTUAL_QTY', 'ADD_FEES', 'Settlement Amount']]
+
+def process_amazon(df):
+    df['Marketplace'] = 'AMAZON'
+    df['DESIGN'] = df['DESIGN'].fillna('UNKNOWN')
+    
+    # Amazon has rows for TYPE (DEL, DTO, FEES, etc.)
+    df['DEL_QTY'] = np.where(df['TYPE'].str.upper() == 'DEL', df['quantity'], 0)
+    df['DTO_QTY'] = np.where(df['TYPE'].str.upper() == 'DTO', df['quantity'], 0)
+    df['RTO_QTY'] = np.where(df['TYPE'].str.upper() == 'RTO', df['quantity'], 0)
+    df['ACTUAL_QTY'] = np.where(df['TYPE'].str.upper() == 'DEL', df['quantity'], 0)
+    
+    df['Sale Amount'] = np.where(df['TYPE'].str.upper() == 'DEL', pd.to_numeric(df['product sales'], errors='coerce').fillna(0), 0)
+    df['Return Amount'] = np.where(df['TYPE'].str.upper().isin(['RTO','DTO']), pd.to_numeric(df['product sales'], errors='coerce').fillna(0), 0)
+    df['Marketplace Fee'] = np.where(df['TYPE'].str.upper() == 'FEES', pd.to_numeric(df['TOTAL'], errors='coerce').fillna(0), 0)
+    df['ADD_FEES'] = np.where(df['TYPE'].str.upper() == 'ADD', pd.to_numeric(df['TOTAL'], errors='coerce').fillna(0), 0)
+    df['Settlement Amount'] = pd.to_numeric(df['TOTAL'], errors='coerce').fillna(0)
+    
+    return df[['MONTH', 'Marketplace', 'DESIGN', 'Sale Amount', 'Return Amount', 'Marketplace Fee', 'DEL_QTY', 'DTO_QTY', 'RTO_QTY', 'ACTUAL_QTY', 'ADD_FEES', 'Settlement Amount']].rename(columns={'MONTH': 'Month'})
+
+def process_myntra(df):
+    df['Marketplace'] = 'MYNTRA'
+    
+    df['DEL_QTY'] = np.where(df['return_type'].str.upper() == 'DEL', df['QTY'], 0)
+    df['DTO_QTY'] = np.where(df['return_type'].str.upper() == 'DTO', df['QTY'], 0)
+    df['RTO_QTY'] = np.where(df['return_type'].str.upper() == 'RTO', df['QTY'], 0)
+    df['ACTUAL_QTY'] = np.where(df['return_type'].str.upper() == 'DEL', df['QTY'], 0)
+    
+    df['Sale Amount'] = pd.to_numeric(df['seller_product_amount'], errors='coerce').fillna(0)
+    df['Return Amount'] = 0 # Calculate based on DTO/RTO logic if available
+    df['Marketplace Fee'] = pd.to_numeric(df['total_commission_plus_tcs_tds_deduction'], errors='coerce').fillna(0)
+    df['ADD_FEES'] = 0
+    df['Settlement Amount'] = pd.to_numeric(df['total_actual_settlement'], errors='coerce').fillna(0)
+    
+    return df[['MONTH', 'Marketplace', 'DESIGN', 'Sale Amount', 'Return Amount', 'Marketplace Fee', 'DEL_QTY', 'DTO_QTY', 'RTO_QTY', 'ACTUAL_QTY', 'ADD_FEES', 'Settlement Amount']].rename(columns={'MONTH': 'Month'})
+
+def process_snapdeal(df):
+    df['Marketplace'] = 'SNAPDEAL'
+    
+    df['DEL_QTY'] = np.where(df['return_type'].str.upper() == 'DEL', df['QTY'], 0)
+    df['DTO_QTY'] = np.where(df['return_type'].str.upper() == 'DTO', df['QTY'], 0)
+    df['RTO_QTY'] = np.where(df['return_type'].str.upper() == 'RTO', df['QTY'], 0)
+    df['ACTUAL_QTY'] = np.where(df['return_type'].str.upper() == 'DEL', df['QTY'], 0)
+    
+    df['Sale Amount'] = pd.to_numeric(df['seller_product_amount'], errors='coerce').fillna(0)
+    df['Return Amount'] = 0
+    df['Marketplace Fee'] = pd.to_numeric(df['total_Commission_plus_tcs_tds_deduction'], errors='coerce').fillna(0)
+    df['ADD_FEES'] = pd.to_numeric(df['ADD'], errors='coerce').fillna(0)
+    df['Settlement Amount'] = pd.to_numeric(df['Settled'], errors='coerce').fillna(0)
+    
+    return df[['MONTH', 'Marketplace', 'DESIGN', 'Sale Amount', 'Return Amount', 'Marketplace Fee', 'DEL_QTY', 'DTO_QTY', 'RTO_QTY', 'ACTUAL_QTY', 'ADD_FEES', 'Settlement Amount']].rename(columns={'MONTH': 'Month'})
+
+
+# --- Sidebar: File Upload Panel ---
+st.sidebar.markdown("## 📤 Setteled Sheets Upload")
+mp_type = st.sidebar.selectbox("Marketplace Select Karein:", ["FLIPKART", "AMAZON", "MEESHO", "MYNTRA", "SNAPDEAL"])
+uploaded_file = st.sidebar.file_uploader(f"{mp_type} Ki Sheet Upload Karein", type=["xlsx", "csv"])
 
 if uploaded_file is not None:
-    if st.sidebar.button("🚀 Push to Online Cloud DB"):
-        with st.spinner("Data online save ho raha hai..."):
+    if st.sidebar.button("🚀 Process & Generate Summary"):
+        with st.spinner("Sheet analyze aur calculate ho rahi hai..."):
             try:
-                # Excel file ki saari sheets ke naam check karna
-                xl = pd.ExcelFile(uploaded_file)
-                sheet_names = xl.sheet_names
-                
-                # 'DESIGN WISE' naam dhoondna (chahe space ho ya chote-bade akshar hon)
-                target_sheet = None
-                for s in sheet_names:
-                    if "DESIGN" in s.upper():
-                        target_sheet = s
-                        break
-                
-                if not target_sheet:
-                    st.sidebar.error("Excel Sheet mein 'DESIGN WISE' naam ki koi sheet nahi mili!")
+                # Read CSV or Excel
+                if uploaded_file.name.endswith('.csv'):
+                    df_raw = pd.read_csv(uploaded_file)
                 else:
-                    df_excel = pd.read_excel(uploaded_file, sheet_name=target_sheet)
-                    df_excel.columns = [str(c).strip() for c in df_excel.columns]
-                    
-                    # Agar table ke pehle column ka naam alag ho toh use stable karna
-                    if len(df_excel.columns) >= 3:
-                        # Pehle 3 columns ko standardized name dena backup ke liye
-                        df_excel = df_excel.rename(columns={
-                            df_excel.columns[0]: "Month",
-                            df_excel.columns[1]: "Marketplace",
-                            df_excel.columns[2]: "Design"
-                        })
-                    
-                    # Data Cleaning: Faltu ya repeat hone wali headers lines ko hatana
-                    df_excel = df_excel[df_excel['Month'].notna()]
-                    df_excel = df_excel[df_excel['Month'].astype(str).str.strip() != 'Month']
-                    df_excel = df_excel[df_excel['Marketplace'].astype(str).str.strip() != 'Sale Amount']
-                    
-                    # Numeric columns handle karna
-                    num_cols_map = {
-                        "Sale Amount": "Sale Amount", "Selling Price": "SELLING PRICE", 
-                        "Marketplace Fee": "Marketplace Fee", "Taxes": "Taxes", 
-                        "Protection Fund": "Protection Fund", "Refund (Rs.)": "Refund (Rs.)", 
-                        "Gross Sale": "GROSS SALE", "DEL": "DEL", "DTO": "DTO", "RTO": "RTO", 
-                        "Actual": "ACTUAL", "Input GST + TCS Credits": "Input GST + TCS Credits", 
-                        "Bank Settlement": "Bank Settlement", "Settlement Value ADD": "Settlement Value ADD", 
-                        "Final Settled Amt.": "FINAL SETTELED AMT.", "Cost Price": "COST PRICE"
-                    }
-                    
-                    db_records = []
-                    for _, row in df_excel.iterrows():
-                        # Agar Design name blank ya header jaisa lag raha ho toh skip karein
-                        dsgn = str(row.get("Design", "")).strip()
-                        if dsgn == "" or "DESIGN" in dsgn.upper() or "SELLING" in dsgn.upper():
-                            continue
-                            
-                        def get_num(col_keys):
-                            for k in col_keys:
-                                if k in row and pd.notna(row[k]):
-                                    val = str(row[k]).replace('₹', '').replace(',', '').strip()
-                                    try: return float(val)
-                                    except: pass
-                            return 0.0
-
-                        db_records.append({
-                            "month": str(row.get("Month", "")).strip(),
-                            "marketplace": str(row.get("Marketplace", "")).strip(),
-                            "design": dsgn,
-                            "sale_amount": get_num(["Sale Amount"]),
-                            "selling_price": get_num(["Selling Price", "SELLING PRICE"]),
-                            "marketplace_fee": get_num(["Marketplace Fee"]),
-                            "taxes": get_num(["Taxes"]),
-                            "protection_fund": get_num(["Protection Fund"]),
-                            "refund_rs": get_num(["Refund (Rs.)"]),
-                            "gross_sale": get_num(["Gross Sale", "GROSS SALE"]),
-                            "del_qty": int(get_num(["DEL"])),
-                            "dto_qty": int(get_num(["DTO"])),
-                            "rto_qty": int(get_num(["RTO"])),
-                            "actual_qty": int(get_num(["Actual", "ACTUAL"])),
-                            "gst_tcs_credits": get_num(["Input GST + TCS Credits"]),
-                            "bank_settlement": get_num(["Bank Settlement"]),
-                            "settlement_value_add": get_num(["Settlement Value ADD"]),
-                            "final_settled_amt": get_num(["Final Settled Amt.", "FINAL SETTELED AMT."]),
-                            "cost_price": get_num(["Cost Price", "COST PRICE"])
-                        })
-                    
-                    if db_records:
-                        # Purana dump clean karke fresh overwrite online safe push
-                        supabase.table("design_wise_summary").delete().neq("month", "dummy_delete_all").execute()
-                        supabase.table("design_wise_summary").insert(db_records).execute()
-                        st.cache_data.clear()
-                        st.sidebar.success("Data successfully cloud database par update ho gaya!")
-                        st.rerun()
-                    else:
-                        st.sidebar.warning("Sheet se koi valid records nahi mile.")
+                    df_raw = pd.read_excel(uploaded_file)
+                
+                # Standardize column casing and spacing
+                df_raw.columns = [str(c).strip() for c in df_raw.columns]
+                
+                # Run respective channel processor
+                if mp_type == "FLIPKART": df_processed = process_flipkart(df_raw)
+                elif mp_type == "MEESHO": df_processed = process_meesho(df_raw)
+                elif mp_type == "AMAZON": df_processed = process_amazon(df_raw)
+                elif mp_type == "MYNTRA": df_processed = process_myntra(df_raw)
+                elif mp_type == "SNAPDEAL": df_processed = process_snapdeal(df_raw)
+                
+                # Data cleaning
+                df_processed = df_processed.dropna(subset=['DESIGN', 'Month'])
+                df_processed = df_processed[df_processed['DESIGN'].astype(str).str.strip() != '']
+                
+                # --- AUTO-AGGREGATION (Design Wise + Month Wise Summary Calculation) ---
+                summary_df = df_processed.groupby(['Month', 'Marketplace', 'DESIGN']).agg({
+                    'Sale Amount': 'sum',
+                    'Return Amount': 'sum',
+                    'Marketplace Fee': 'sum',
+                    'DEL_QTY': 'sum',
+                    'DTO_QTY': 'sum',
+                    'RTO_QTY': 'sum',
+                    'ACTUAL_QTY': 'sum',
+                    'ADD_FEES': 'sum',
+                    'Settlement Amount': 'sum'
+                }).reset_index()
+                
+                # Push calculated summary to Database
+                db_records = summary_df.to_dict(orientation='records')
+                
+                # Overwrite or Add logic
+                supabase.table("design_wise_summary").delete().eq("marketplace", mp_type).execute()
+                
+                chunk_size = 200
+                for i in range(0, len(db_records), chunk_size):
+                    supabase.table("design_wise_summary").insert(db_records[i:i+chunk_size]).execute()
+                
+                st.cache_data.clear()
+                st.sidebar.success(f"🎉 {mp_type} Ka Data successfully process aur design-wise update ho gaya!")
+                st.rerun()
+                
             except Exception as e:
-                st.sidebar.error(f"Upload fail hua: {e}")
+                st.sidebar.error(f"Error aaya: {e}")
 
-st.sidebar.write("---")
-st.sidebar.subheader("🔍 Data Filters")
+# --- Main Dashboard Summary View ---
+st.markdown("## 📈 Design-wise & Month-wise Live Reports")
 
-# --- Interactive View Logic ---
 if not df_design.empty:
-    months = ["All"] + sorted(list(df_design["Month"].dropna().unique()))
-    selected_month = st.sidebar.selectbox("Month Filter:", months)
-
-    marketplaces = ["All"] + sorted(list(df_design["Marketplace"].dropna().unique()))
-    selected_mp = st.sidebar.selectbox("Marketplace Filter:", marketplaces)
-
-    designs = ["All"] + sorted(list(df_design["Design"].dropna().unique()))
-    selected_design = st.sidebar.selectbox("Design Filter:", designs)
-
-    filtered_df = df_design.copy()
-    if selected_month != "All": filtered_df = filtered_df[filtered_df["Month"] == selected_month]
-    if selected_mp != "All": filtered_df = filtered_df[filtered_df["Marketplace"] == selected_mp]
-    if selected_design != "All": filtered_df = filtered_df[filtered_df["Design"] == selected_design]
-
-    # --- Metrics Section ---
-    st.subheader("📋 Key Financial KPI")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Gross Sale QTY (DEL)", f"{int(filtered_df['DEL'].sum())} Pcs")
-    m2.metric("Total Sale Amount", f"₹{filtered_df['Sale Amount'].sum():,.2f}")
-    m3.metric("Final Settled Amount", f"₹{filtered_df['Final Settled Amt.'].sum():,.2f}")
-    m4.metric("Total Refund Amount", f"₹{filtered_df['Refund (Rs.)'].sum():,.2f}")
-
-    st.write("---")
+    # Quick Summary Calculation for UI
+    df_display = df_design.copy()
     
-    # --- Data Grid View ---
-    st.subheader("📊 Design Wise Ledger View")
+    # Filters
+    col1, col2 = st.columns(2)
+    with col1:
+        selected_mp = st.selectbox("Filter Marketplace:", ["All"] + list(df_display['marketplace'].unique()))
+    with col2:
+        selected_month = st.selectbox("Filter Month:", ["All"] + list(df_display['month'].unique()))
+        
+    if selected_mp != "All": df_display = df_display[df_display['marketplace'] == selected_mp]
+    if selected_month != "All": df_display = df_display[df_display['month'] == selected_month]
     
-    fmt_dict = {
-        'Sale Amount': '₹{:,.2f}', 'Selling Price': '₹{:,.2f}', 'Marketplace Fee': '₹{:,.2f}',
-        'Taxes': '₹{:,.2f}', 'Protection Fund': '₹{:,.2f}', 'Refund (Rs.)': '₹{:,.2f}',
-        'Gross Sale': '₹{:,.2f}', 'Input GST + TCS Credits': '₹{:,.2f}', 'Bank Settlement': '₹{:,.2f}',
-        'Settlement Value ADD': '₹{:,.2f}', 'Final Settled Amt.': '₹{:,.2f}', 'Cost Price': '₹{:,.2f}'
+    # Formatting Columns for beautiful ledger view
+    df_display = df_display.rename(columns={
+        'month': 'Month', 'marketplace': 'Marketplace', 'design': 'Design',
+        'sale_amount': 'Sale Amount', 'return_amount': 'Return Amount',
+        'marketplace_fee': 'Marketplace Fees', 'del_qty': 'DEL QTY',
+        'dto_qty': 'DTO QTY', 'rto_qty': 'RTO QTY', 'actual_qty': 'ACTUAL DEL QTY',
+        'add_fees': 'ADD', 'settlement_amount': 'Settlement Amount'
+    })
+    
+    # Add Total Month/Design rows using pandas Pivot or grouping inside the app if needed
+    st.subheader("📋 Final Aggregated Ledger View")
+    
+    # Formatting styles
+    fmt = {
+        'Sale Amount': '₹{:,.2f}', 'Return Amount': '₹{:,.2f}', 'Marketplace Fees': '₹{:,.2f}',
+        'ADD': '₹{:,.2f}', 'Settlement Amount': '₹{:,.2f}',
+        'DEL QTY': '{:,.0f}', 'DTO QTY': '{:,.0f}', 'RTO QTY': '{:,.0f}', 'ACTUAL DEL QTY': '{:,.0f}'
     }
-    available_fmt = {k: v for k, v in fmt_dict.items() if k in filtered_df.columns}
-    st.dataframe(filtered_df.style.format(available_fmt), use_container_width=True, hide_index=True)
-
+    
+    st.dataframe(df_display.style.format(fmt), use_container_width=True, hide_index=True)
+    
+    # Download report
     st.download_button(
-        label="📥 Download This Filtered Design-Wise Summary",
-        data=filtered_df.to_csv(index=False).encode('utf-8'),
-        file_name='Design_Wise_Summary_Report.csv',
-        mime='text/csv',
+        label="📥 Download Summary Report",
+        data=df_display.to_csv(index=False).encode('utf-8'),
+        file_name='Design_Month_Wise_Summary.csv',
+        mime='text/csv'
     )
 else:
-    st.info("Database khali hai! Kripya side panel ka use karke apni 'DESIGN WISE' excel sheet upload karein.")
+    st.info("Database abhi khali hai. Side panel se kisi bhi channel ki settlement sheet upload karein.")
