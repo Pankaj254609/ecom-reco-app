@@ -12,7 +12,7 @@ st.title("📊 डिज़ाइन-वाइज़, मंथ-वाइज़ 
 def init_supabase() -> Client:
     # Direct Production Keys (No fallback input boxes anymore)
     url = "https://tpbbngotolgthytgjarp.supabase.co"
-    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRwYmJuZ290b2xndGh5dGdqYXJwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTe4MzczNjc1MywiZXhwIjoyMDk5MzEyNzUzfQ.OuKXzzsjce5J9Ak6_Fu6GQTeK7mz37BCrX21HWG1DF8"
+    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRwYmJuZ290b2xndGh5dGdqYXJwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3MzY3NTMsImV4cCI6MjA5OTMxMjc1M30.0uxeXOsMDbAjtAdT_RZlb6NAs-OBlydKr13-lv9l5Lw"
     return create_client(url, key)
 
 # Safe Initialize Client
