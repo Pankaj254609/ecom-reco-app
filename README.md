@@ -1,3 +1,3 @@
 [supabase]
-url = "https://tpbbngotolgthytgjarp.supabase.co/rest/v1/"
+url = "https://tpbbngotolgthytgjarp.supabase.co"
 key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRwYmJuZ290b2xndGh5dGdqYXJwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzczNjc1MywiZXhwIjoyMDk5MzEyNzUzfQ.OuKXzzsjce5J9Ak6_Fu6GQTeK7mz37BCrX21HWG1DF8"
