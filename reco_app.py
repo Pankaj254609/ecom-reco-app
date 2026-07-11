@@ -14,12 +14,14 @@ def init_supabase() -> Client:
     key = st.secrets["supabase"]["key"]
     return create_client(url, key)
 
+# --- Sabse Pehle Supabase Client Initialize Karein (Global Level Par) ---
 try:
     supabase = init_supabase()
 except Exception as e:
-    st.error("Supabase configuration secrets sahi nahi hain. Kripya check karein.")
+    st.error(f"Supabase connection initialize karne mein dikkat aayi: {e}")
+    st.stop()  # Agar database connect nahi hua toh code aage nahi chalega aur crash nahi hoga
 
-# --- Load Cloud Data ---
+# --- Load Cloud Data (Ab iske upar supabase completely available hai) ---
 @st.cache_data(ttl=600)
 def load_cloud_data():
     try:
@@ -185,7 +187,7 @@ if uploaded_file is not None and upload_brand != "":
                     'Settlement Amount': 'sum'
                 }).reset_index()
                 
-                db_records = summary_df.to_dict(orient='records')  # <-- FIXED KEYWORD HERE FROM 'orientation' TO 'orient'
+                db_records = summary_df.to_dict(orient='records')
                 
                 # Dynamic lowercase keys for matching database column architecture
                 db_records_clean = []
