@@ -6,7 +6,7 @@ import numpy as np
 st.set_page_config(page_title="Flipkart SKU Wise Reconciliation", layout="wide")
 st.title("📊 Flipkart Order Item ID & SKU Wise Real Settlement Summary")
 
-# --- Custom Global UI Styling (Uniform #46bdc6 Color Style as requested) ---
+# --- Custom Global UI Styling (Uniform #46bdc6 Color Style) ---
 st.markdown(
     """
     <style>
@@ -46,12 +46,22 @@ def get_num_val(val):
 
 # --- ADVANCED FLIPKART SKU & ORDER ITEM ID PROCESSOR ---
 def process_flipkart_sku_wise(df):
-    # Standardize Column Names: Strip spaces, lowercase matching to remove 'Quantity' key errors
+    # Fix the Unnamed Column / Top Row Offset Problem dynamically
+    # Agar pehle column me 'payment' ya 'summary' jaisa metadata ho, to real header dhundhein
+    if df.shape[0] > 0:
+        for i in range(min(15, len(df))):
+            row_values = [str(x).lower().strip() for x in df.iloc[i].dropna()]
+            if 'order item id' in row_values or 'order id' in row_values or 'quantity' in row_values:
+                # Set this row as the true header
+                df.columns = [str(c).strip() for c in df.iloc[i]]
+                df = df.iloc[i+1:].reset_index(drop=True)
+                break
+
+    # Clean Column Names again after shifting
     df.columns = [str(c).strip() for c in df.columns]
-    
-    # Dynamic column mapping to find matching column even if case differs
     col_mapping = {c.lower(): c for c in df.columns}
     
+    # Target exact structural columns
     qty_col = col_mapping.get('quantity', None)
     sale_col = col_mapping.get('sale amount (rs.)', col_mapping.get('sale amount', None))
     refund_col = col_mapping.get('refund (rs.)', col_mapping.get('refund', None))
@@ -64,9 +74,9 @@ def process_flipkart_sku_wise(df):
     sku_col = col_mapping.get('seller sku', col_mapping.get('sku', None))
     return_type_col = col_mapping.get('return type', None)
 
-    # Validations
+    # Secondary Check if still not found
     if not qty_col or not order_item_col:
-        st.error(f"Sheet mein zaroori columns nahi mile! Available columns: {list(df.columns)}")
+        st.error(f"⚠️ **Error:** Is sheet ke true headers system match nahi kar paa raha hai. Kripya check karein ki aapne sahi sheet upload ki hai. Columns mile: {list(df.columns)[:8]}")
         st.stop()
 
     # 1. Clean the essential numeric columns
@@ -86,7 +96,7 @@ def process_flipkart_sku_wise(df):
     df['Logistics_Return'] = np.where(df['Temp_Return'].str.contains('RTO|DTO|COURIER', case=False, na=False), df['Clean_Qty'], 0)
     df['Customer_Return'] = np.where(df['Temp_Return'].str.contains('CUSTOMER', case=False, na=False), df['Clean_Qty'], 0)
     
-    # 3. Group by Order Item ID and SKU to blend 0-180 INR adjustment rows
+    # 3. Group by Order Item ID and SKU to blend 0-180 INR rows
     group_keys = [df[order_item_col], df[sku_col] if sku_col else df[order_item_col]]
     
     sku_summary = df.groupby(group_keys).agg({
@@ -178,4 +188,4 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"Sheet load karne ya processing mein error aaya: {str(e)}")
 else:
-    st
+    st.info("Kripya side panel se apni Flipkart ki payment sheet upload karein.")
