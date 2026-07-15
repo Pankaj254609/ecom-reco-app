@@ -6,7 +6,7 @@ import numpy as np
 st.set_page_config(page_title="Flipkart SKU Wise Reconciliation", layout="wide")
 st.title("📊 Flipkart Order Item ID & SKU Wise Real Settlement Summary")
 
-# --- Custom Global UI Styling (Uniform #46bdc6 Color Style) ---
+# --- Custom Global UI Styling (#46bdc6 Style) ---
 st.markdown(
     """
     <style>
@@ -34,7 +34,6 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# --- Helper to Clean Numbers Safely ---
 def get_num_val(val):
     if pd.isna(val):
         return 0.0
@@ -46,41 +45,53 @@ def get_num_val(val):
 
 # --- ADVANCED FLIPKART SKU & ORDER ITEM ID PROCESSOR ---
 def process_flipkart_sku_wise(df):
-    # Fix the Unnamed Column / Top Row Offset Problem dynamically
-    # Agar pehle column me 'payment' ya 'summary' jaisa metadata ho, to real header dhundhein
-    if df.shape[0] > 0:
-        for i in range(min(15, len(df))):
-            row_values = [str(x).lower().strip() for x in df.iloc[i].dropna()]
-            if 'order item id' in row_values or 'order id' in row_values or 'quantity' in row_values:
-                # Set this row as the true header
-                df.columns = [str(c).strip() for c in df.iloc[i]]
-                df = df.iloc[i+1:].reset_index(drop=True)
+    # STEP 1: Dynamic Row Skipping Logic (Unnamed Columns Fix)
+    # Agar row 0 ya uske baad wale rows me metadata hai, toh scan karke real header row nikalenge
+    header_found = False
+    for i in range(min(20, len(df))):
+        row_str = [str(x).lower().strip() for x in df.iloc[i].dropna().values]
+        # Check standard flipkart keys inside any column
+        if any('order item id' in x or 'order_item_id' in x or 'quantity' in x or 'sale amount' in x for x in row_str):
+            df.columns = [str(c).strip() for c in df.iloc[i]]
+            df = df.iloc[i+1:].reset_index(drop=True)
+            header_found = True
+            break
+            
+    # Agar direct fix nahi hua, toh search fallback
+    if not header_found:
+        # Pata lagao kis row me column names jaisa valid content hai
+        for col in df.columns:
+            if df[col].astype(str).str.contains('Order item ID|Quantity|Sale Amount', case=False, na=False).any():
+                idx = df[df[col].astype(str).str.contains('Order item ID|Quantity|Sale Amount', case=False, na=False)].index[0]
+                df.columns = [str(c).strip() for c in df.iloc[idx]]
+                df = df.iloc[idx+1:].reset_index(drop=True)
                 break
 
-    # Clean Column Names again after shifting
-    df.columns = [str(c).strip() for c in df.columns]
+    # Clean text columns name mappings
+    df.columns = [str(c).replace('\n', ' ').strip() for c in df.columns]
     col_mapping = {c.lower(): c for c in df.columns}
     
-    # Target exact structural columns
-    qty_col = col_mapping.get('quantity', None)
-    sale_col = col_mapping.get('sale amount (rs.)', col_mapping.get('sale amount', None))
-    refund_col = col_mapping.get('refund (rs.)', col_mapping.get('refund', None))
-    fee_col = col_mapping.get('marketplace fee (rs.)', col_mapping.get('marketplace fee', None))
-    tax_col = col_mapping.get('taxes (rs.)', col_mapping.get('taxes', None))
-    add_col = col_mapping.get('offer adjustments (rs.)', col_mapping.get('offer adjustments', col_mapping.get('settlement value add', None)))
-    settle_col = col_mapping.get('bank settlement value (rs.)', col_mapping.get('bank settlement value', col_mapping.get('bank settlement', None)))
+    # Resolving structural column names dynamically
+    qty_col = next((col_mapping[k] for k in col_mapping if 'quantity' in k), None)
+    sale_col = next((col_mapping[k] for k in col_mapping if 'sale amount' in k), None)
+    refund_col = next((col_mapping[k] for k in col_mapping if 'refund' in k), None)
+    fee_col = next((col_mapping[k] for k in col_mapping if 'marketplace fee' in k), None)
+    tax_col = next((col_mapping[k] for k in col_mapping if 'taxes' in k), None)
+    add_col = next((col_mapping[k] for k in col_mapping if 'offer adjustment' in k or 'settlement value add' in k), None)
+    settle_col = next((col_mapping[k] for k in col_mapping if 'bank settlement' in k or 'settled' in k), None)
     
-    order_item_col = col_mapping.get('order item id', None)
-    sku_col = col_mapping.get('seller sku', col_mapping.get('sku', None))
-    return_type_col = col_mapping.get('return type', None)
+    order_item_col = next((col_mapping[k] for k in col_mapping if 'order item id' in k or 'order_item_id' in k), None)
+    sku_col = next((col_mapping[k] for k in col_mapping if 'seller sku' in k or 'sku' in k), None)
+    return_type_col = next((col_mapping[k] for k in col_mapping if 'return type' in k or 'return_type' in k), None)
 
-    # Secondary Check if still not found
-    if not qty_col or not order_item_col:
-        st.error(f"⚠️ **Error:** Is sheet ke true headers system match nahi kar paa raha hai. Kripya check karein ki aapne sahi sheet upload ki hai. Columns mile: {list(df.columns)[:8]}")
+    # Final validation block
+    if not order_item_col:
+        st.error(f"❌ **Error:** System ko true columns nahi mil paye. Kripya check karein ki aapne sahi tab upload kiya hai. Columns mile: {list(df.columns)[:6]}")
+        st.info("💡 **Tip:** Agar aap Excel (.xlsx) file use kar rahe hain, toh usme se **'Orders'** wale tab ko alag se CSV ya Excel banakar upload karein.")
         st.stop()
 
-    # 1. Clean the essential numeric columns
-    df['Clean_Qty'] = pd.to_numeric(df[qty_col], errors='coerce').fillna(0).astype(int)
+    # Clean raw numeric items
+    df['Clean_Qty'] = pd.to_numeric(df[qty_col], errors='coerce').fillna(0).astype(int) if qty_col else 1
     df['Clean_Sale'] = df[sale_col].apply(get_num_val) if sale_col else 0.0
     df['Clean_Refund'] = df[refund_col].apply(get_num_val) if refund_col else 0.0
     df['Clean_Fee'] = df[fee_col].apply(get_num_val) if fee_col else 0.0
@@ -88,18 +99,16 @@ def process_flipkart_sku_wise(df):
     df['Clean_Add'] = df[add_col].apply(get_num_val) if add_col else 0.0
     df['Clean_Settle'] = df[settle_col].apply(get_num_val) if settle_col else 0.0
     
-    # 2. Extract Return Categories
+    # Return types mapping logic
     df['Temp_Return'] = df[return_type_col].fillna('NA').astype(str).str.strip().str.upper() if return_type_col else 'NA'
     
-    # Calculate conditional units logic
-    df['Is_Sale'] = np.where((df['Temp_Return'] == 'NA') & (df['Clean_Qty'] > 0), df['Clean_Qty'], 0)
+    df['Is_Sale'] = np.where((df['Temp_Return'] == 'NA') | (df['Temp_Return'] == ''), df['Clean_Qty'], 0)
     df['Logistics_Return'] = np.where(df['Temp_Return'].str.contains('RTO|DTO|COURIER', case=False, na=False), df['Clean_Qty'], 0)
     df['Customer_Return'] = np.where(df['Temp_Return'].str.contains('CUSTOMER', case=False, na=False), df['Clean_Qty'], 0)
     
-    # 3. Group by Order Item ID and SKU to blend 0-180 INR rows
-    group_keys = [df[order_item_col], df[sku_col] if sku_col else df[order_item_col]]
-    
-    sku_summary = df.groupby(group_keys).agg({
+    # Grouping data at uniquely identified combinations
+    g_sku = sku_col if sku_col else order_item_col
+    sku_summary = df.groupby([df[order_item_col], df[g_sku]]).agg({
         'Is_Sale': 'sum',
         'Logistics_Return': 'sum',
         'Customer_Return': 'sum',
@@ -111,7 +120,6 @@ def process_flipkart_sku_wise(df):
         'Clean_Settle': 'sum'
     }).reset_index()
     
-    # Rename for professional UI presentation
     sku_summary.columns = [
         'Order Item ID', 'Seller SKU', 'Total Sale Qty', 'Total Logistics Return Qty', 
         'Total Customer Return Qty', 'Gross Sale Amt', 'Total Refund', 
@@ -124,18 +132,20 @@ def process_flipkart_sku_wise(df):
 st.sidebar.markdown("## 📤 Sheet Upload Panel")
 uploaded_file = st.sidebar.file_uploader("Flipkart 'Orders' Sheet CSV Upload Karein", type=["csv", "xlsx"])
 
-# --- Main Logic Dashboard ---
 if uploaded_file is not None:
     try:
+        # Safely capture sheets or format types
         if uploaded_file.name.endswith('.csv'):
             df_raw = pd.read_csv(uploaded_file, low_memory=False)
         else:
-            df_raw = pd.read_excel(uploaded_file)
+            # Agar Excel upload ki hai, toh specific 'Orders' tab read karne ka try karein
+            xl = pd.ExcelFile(uploaded_file)
+            target_sheet = 'Orders' if 'Orders' in xl.sheet_names else xl.sheet_names[0]
+            df_raw = pd.read_excel(uploaded_file, sheet_name=target_sheet)
             
-        # Running the dynamic item-sku processor
         processed_report = process_flipkart_sku_wise(df_raw)
         
-        # Show Highlighted Metrics Cards
+        # Display Metrics Block
         st.markdown("### 📈 Consolidated Performance KPI Dashboard")
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Gross Sales", f"₹{processed_report['Gross Sale Amt'].sum():,.2f}")
@@ -145,7 +155,7 @@ if uploaded_file is not None:
         
         st.write("---")
         
-        # Injecting Bottom TOTAL Row dynamically
+        # Bottom Total Row Injection
         total_row = pd.DataFrame([{
             'Order Item ID': 'TOTAL', 'Seller SKU': '',
             'Total Sale Qty': processed_report['Total Sale Qty'].sum(),
@@ -161,7 +171,6 @@ if uploaded_file is not None:
         
         display_df = pd.concat([processed_report, total_row], ignore_index=True)
         
-        # Pure Uniform #46bdc6 Color Style formatting logic 
         def style_full_table(df):
             return df.style.apply(lambda x: pd.DataFrame([['background-color: #46bdc6; color: black; font-weight: bold;'] * len(df.columns)], index=df.index, columns=df.columns), axis=None)
         
@@ -173,11 +182,9 @@ if uploaded_file is not None:
         
         styled_final = style_full_table(display_df).format(fmt)
         
-        # Display live grid layout
         st.subheader("📋 SKU & Order Item ID Wise Consolidated Sheet Ledger")
         st.dataframe(styled_final, use_container_width=True, hide_index=True)
         
-        # Single click download option
         st.download_button(
             label="📥 Download Reconciled SKU Sheet",
             data=processed_report.to_csv(index=False).encode('utf-8'),
