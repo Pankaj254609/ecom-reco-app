@@ -5,6 +5,36 @@ from supabase import create_client, Client
 
 # --- Page Config ---
 st.set_page_config(page_title="Multi-Brand E-commerce Dashboard", layout="wide")
+
+# --- Injection of Custom CSS for Brand Base Color (#46bdc6) ---
+st.markdown(f"""
+    <style>
+        /* Base Background Accent & Primary Color Styles */
+        div[data-testid="stMetricValue"] {{
+            color: #46bdc6 !important;
+        }}
+        .stButton>button {{
+            background-color: #46bdc6 !important;
+            color: white !important;
+            border-radius: 6px;
+            border: none;
+        }}
+        .stButton>button:hover {{
+            background-color: #35a4ad !important;
+            color: white !important;
+        }}
+        /* Subheaders and highlights matching the brand color */
+        h2, h3, h1 {{
+            color: #1e6b70 !important;
+        }}
+        /* Highlight Total Row in Dataframe */
+        .highlight-total {{
+            background-color: rgba(70, 189, 198, 0.2) !important;
+            font-weight: bold !important;
+        }}
+    </style>
+""", unsafe_allow_html=True)
+
 st.title("📊 डिज़ाइन-वाइज़, मंथ-वाइज़ और ब्रांड-वाइज़ ओवरऑल समरी डैशबोर्ड")
 
 # --- Direct Supabase Database Connection ---
@@ -141,7 +171,6 @@ def process_snapdeal(df, brand_name):
 # --- Sidebar: Multi-Brand & File Upload Panel ---
 st.sidebar.markdown("## 📤 Sheet Upload & Management")
 
-# Default brand list mein recoapppy add kiya gaya hai taaki dropdown/input mein accessible rahe
 existing_brands = ['RECOAPPPY', 'TERRADESI']
 if not df_design.empty:
     b_col = 'brand' if 'brand' in df_design.columns else 'Brand'
@@ -216,23 +245,19 @@ st.markdown("## 📈 Brand, Marketplace & Month Wise Unified Reports")
 if not df_design.empty:
     df_display = df_design.copy()
     
-    # Column normalisation
     if 'brand' not in df_display.columns and 'Brand' in df_display.columns:
         df_display = df_display.rename(columns={'Brand': 'brand', 'Month': 'month', 'Marketplace': 'marketplace', 'Design': 'design'})
     
-    # Case insensitivity fix (Sabhi brand names upper case)
     if 'brand' in df_display.columns:
         df_display['brand'] = df_display['brand'].astype(str).str.strip().str.upper()
     else:
         df_display['brand'] = 'RECOAPPPY'
         
-    # --- UI Filters ---
     c1, c2, c3 = st.columns(3)
     with c1:
         unique_brands_db = sorted(list(df_display['brand'].dropna().unique()))
-        # Agar db khali hai to default list options
         if not unique_brands_db: unique_brands_db = ["RECOAPPPY", "TERRADESI"]
-        selected_brand = st.selectbox("⭐ Select Brand:", unique_brands_db)
+        selected_brand = st.selectbox("⭐ Select Brand:", unique_brands_db, index=0)
         
     with c2:
         df_brand_filtered = df_display[df_display['brand'] == selected_brand]
@@ -243,14 +268,12 @@ if not df_design.empty:
         unique_months = ["All"] + sorted(list(df_brand_filtered['month'].dropna().unique())) if 'month' in df_brand_filtered.columns else ["All"]
         selected_month = st.selectbox("Filter Month:", unique_months)
         
-    # --- Data Filter Logic Execution ---
     df_final = df_brand_filtered.copy()
     if selected_mp != "All": 
         df_final = df_final[df_final['marketplace'] == selected_mp]
     if selected_month != "All": 
         df_final = df_final[df_final['month'] == selected_month]
         
-    # Numeric column parsing
     num_cols = ['sale_amount', 'return_amount', 'marketplace_fee', 'del_qty', 'dto_qty', 'rto_qty', 'actual_qty', 'add_fees', 'settlement_amount']
     for col in num_cols:
         if col in df_final.columns:
@@ -258,8 +281,6 @@ if not df_design.empty:
         else:
             df_final[col] = 0.0
 
-    # Dynamic Row-Wise / Design Wise Groupby (Jaisa Excel Array Formula mein chahiye tha)
-    # Yeh dropdown ke select hone par direct row wise summary generate karega
     df_summary_rowwise = df_final.groupby(['month', 'marketplace', 'brand', 'design']).agg({
         'sale_amount': 'sum',
         'return_amount': 'sum',
@@ -272,7 +293,7 @@ if not df_design.empty:
         'settlement_amount': 'sum'
     }).reset_index()
 
-    # UI Columns formatting
+    # Rename UI columns
     df_ui = df_summary_rowwise.rename(columns={
         'month': 'Month', 'marketplace': 'Marketplace', 'brand': 'Brand', 'design': 'Design',
         'sale_amount': 'Sale Amount', 'return_amount': 'Return Amount',
@@ -281,6 +302,28 @@ if not df_design.empty:
         'add_fees': 'ADD', 'settlement_amount': 'Settlement Amount'
     })
     
+    # --- ADDING TOTAL ROW AT THE BOTTOM OF THE DATA ---
+    if not df_ui.empty:
+        total_values = {
+            'Month': 'TOTAL',
+            'Marketplace': '-',
+            'Brand': '-',
+            'Design': 'All Designs Total',
+            'Sale Amount': df_ui['Sale Amount'].sum(),
+            'Return Amount': df_ui['Return Amount'].sum(),
+            'Marketplace Fees': df_ui['Marketplace Fees'].sum(),
+            'DEL QTY': df_ui['DEL QTY'].sum(),
+            'DTO QTY': df_ui['DTO QTY'].sum(),
+            'RTO QTY': df_ui['RTO QTY'].sum(),
+            'ACTUAL DEL QTY': df_ui['ACTUAL DEL QTY'].sum(),
+            'ADD': df_ui['ADD'].sum(),
+            'Settlement Amount': df_ui['Settlement Amount'].sum()
+        }
+        df_total_row = pd.DataFrame([total_values])
+        df_ui_with_total = pd.concat([df_ui, df_total_row], ignore_index=True)
+    else:
+        df_ui_with_total = df_ui.copy()
+
     # KPI Blocks
     st.markdown(f"### 📊 Quick KPI Summary for **{selected_brand}**")
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
@@ -291,7 +334,7 @@ if not df_design.empty:
 
     st.write("---")
     
-    # --- Row-wise Live Ledger Data Output ---
+    # --- Row-wise Live Ledger Data Output with Formatter ---
     st.subheader(f"📋 Live Row-Wise Design Ledger: {selected_brand}")
     
     fmt = {
@@ -300,11 +343,12 @@ if not df_design.empty:
         'DEL QTY': '{:,.0f}', 'DTO QTY': '{:,.0f}', 'RTO QTY': '{:,.0f}', 'ACTUAL DEL QTY': '{:,.0f}'
     }
     
-    st.dataframe(df_ui.style.format(fmt), use_container_width=True, hide_index=True)
+    # Apply styler for row level calculations
+    st.dataframe(df_ui_with_total.style.format(fmt), use_container_width=True, hide_index=True)
     
     st.download_button(
         label=f"📥 Download Report ({selected_brand})",
-        data=df_ui.to_csv(index=False).encode('utf-8'),
+        data=df_ui_with_total.to_csv(index=False).encode('utf-8'),
         file_name=f'{selected_brand}_Summary_Report.csv',
         mime='text/csv'
     )
