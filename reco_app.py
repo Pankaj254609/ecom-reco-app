@@ -11,7 +11,6 @@ st.title("📊 डिज़ाइन-वाइज़, मंथ-वाइज़ 
 @st.cache_resource
 def init_supabase() -> Client:
     url = "https://tpbbngotolgthytgjarp.supabase.co"
-    # Kripya niche apni naye wale Supabase Dashboard se copy ki hui Anon Key paste karein:
     key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRwYmJuZ290b2xndGh5dGdqYXJwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3MzY3NTMsImV4cCI6MjA5OTMxMjc1M30.0uxeXOsMDbAjtAdT_RZlb6NAs-OBlydKr13-lv9l5Lw"
     return create_client(url, key)
 
@@ -31,6 +30,7 @@ def load_cloud_data():
         df = pd.DataFrame(res.data)
         return df
     except Exception as e:
+        st.error(f"Data load karne mein error: {e}")
         return pd.DataFrame()
 
 df_design = load_cloud_data()
@@ -141,22 +141,22 @@ def process_snapdeal(df, brand_name):
 # --- Sidebar: Multi-Brand & File Upload Panel ---
 st.sidebar.markdown("## 📤 Sheet Upload & Management")
 
-# Existing brands load list to avoid typos
-existing_brands = ['TERRADESI']
+# Default brand list mein recoapppy add kiya gaya hai taaki dropdown/input mein accessible rahe
+existing_brands = ['RECOAPPPY', 'TERRADESI']
 if not df_design.empty:
     b_col = 'brand' if 'brand' in df_design.columns else 'Brand'
     if b_col in df_design.columns:
-        unique_b = list(df_design[b_col].dropna().unique())
-        if unique_b: existing_brands = unique_b
+        unique_b = [str(x).strip().upper() for x in df_design[b_col].dropna().unique()]
+        for b in unique_b:
+            if b not in existing_brands:
+                existing_brands.append(b)
 
-# 1. Select Brand Name or add new one
 upload_brand_mode = st.sidebar.radio("Brand Select Type:", ["Existing Brand", "Add New Brand"])
 if upload_brand_mode == "Existing Brand":
     upload_brand = st.sidebar.selectbox("Brand Name:", existing_brands)
 else:
     upload_brand = st.sidebar.text_input("New Brand Name likhein:", "").strip().upper()
 
-# 2. Select Marketplace
 mp_type = st.sidebar.selectbox("Marketplace Select Karein:", ["FLIPKART", "AMAZON", "MEESHO", "MYNTRA", "SNAPDEAL"])
 uploaded_file = st.sidebar.file_uploader(f"{mp_type} Ki Sheet Upload Karein", type=["xlsx", "csv"])
 
@@ -180,7 +180,6 @@ if uploaded_file is not None and upload_brand != "":
                 df_processed = df_processed.dropna(subset=['DESIGN', 'Month'])
                 df_processed = df_processed[df_processed['DESIGN'].astype(str).str.strip() != '']
                 
-                # --- AUTO-AGGREGATION ---
                 summary_df = df_processed.groupby(['Month', 'Marketplace', 'Brand', 'DESIGN']).agg({
                     'Sale Amount': 'sum',
                     'Return Amount': 'sum',
@@ -194,12 +193,10 @@ if uploaded_file is not None and upload_brand != "":
                 }).reset_index()
                 
                 db_records = summary_df.to_dict(orient='records')
-                
                 db_records_clean = []
                 for record in db_records:
                     db_records_clean.append({k.lower().replace(' ', '_'): v for k, v in record.items()})
 
-                # Delete existing data freshly
                 supabase.table("design_wise_summary").delete().eq("marketplace", mp_type).eq("brand", upload_brand).execute()
                 
                 chunk_size = 200
@@ -219,33 +216,41 @@ st.markdown("## 📈 Brand, Marketplace & Month Wise Unified Reports")
 if not df_design.empty:
     df_display = df_design.copy()
     
+    # Column normalisation
     if 'brand' not in df_display.columns and 'Brand' in df_display.columns:
         df_display = df_display.rename(columns={'Brand': 'brand', 'Month': 'month', 'Marketplace': 'marketplace', 'Design': 'design'})
     
-    if 'brand' not in df_display.columns:
-        df_display['brand'] = 'TERRADESI'
+    # Case insensitivity fix (Sabhi brand names upper case)
+    if 'brand' in df_display.columns:
+        df_display['brand'] = df_display['brand'].astype(str).str.strip().str.upper()
+    else:
+        df_display['brand'] = 'RECOAPPPY'
         
-    # --- Top Level Dropdown Filters ---
+    # --- UI Filters ---
     c1, c2, c3 = st.columns(3)
     with c1:
-        unique_brands = list(df_display['brand'].dropna().unique())
-        selected_brand = st.selectbox("⭐ Select Brand:", unique_brands if unique_brands else ["TERRADESI"])
+        unique_brands_db = sorted(list(df_display['brand'].dropna().unique()))
+        # Agar db khali hai to default list options
+        if not unique_brands_db: unique_brands_db = ["RECOAPPPY", "TERRADESI"]
+        selected_brand = st.selectbox("⭐ Select Brand:", unique_brands_db)
+        
     with c2:
         df_brand_filtered = df_display[df_display['brand'] == selected_brand]
-        unique_mps = ["All"] + list(df_brand_filtered['marketplace'].dropna().unique())
+        unique_mps = ["All"] + sorted(list(df_brand_filtered['marketplace'].dropna().unique())) if 'marketplace' in df_brand_filtered.columns else ["All"]
         selected_mp = st.selectbox("Filter Marketplace:", unique_mps)
+        
     with c3:
-        unique_months = ["All"] + list(df_brand_filtered['month'].dropna().unique())
+        unique_months = ["All"] + sorted(list(df_brand_filtered['month'].dropna().unique())) if 'month' in df_brand_filtered.columns else ["All"]
         selected_month = st.selectbox("Filter Month:", unique_months)
         
-    # Apply Filtering
+    # --- Data Filter Logic Execution ---
     df_final = df_brand_filtered.copy()
     if selected_mp != "All": 
         df_final = df_final[df_final['marketplace'] == selected_mp]
     if selected_month != "All": 
         df_final = df_final[df_final['month'] == selected_month]
         
-    # Map types correctly
+    # Numeric column parsing
     num_cols = ['sale_amount', 'return_amount', 'marketplace_fee', 'del_qty', 'dto_qty', 'rto_qty', 'actual_qty', 'add_fees', 'settlement_amount']
     for col in num_cols:
         if col in df_final.columns:
@@ -253,8 +258,22 @@ if not df_design.empty:
         else:
             df_final[col] = 0.0
 
-    # UI Column Renaming
-    df_ui = df_final.rename(columns={
+    # Dynamic Row-Wise / Design Wise Groupby (Jaisa Excel Array Formula mein chahiye tha)
+    # Yeh dropdown ke select hone par direct row wise summary generate karega
+    df_summary_rowwise = df_final.groupby(['month', 'marketplace', 'brand', 'design']).agg({
+        'sale_amount': 'sum',
+        'return_amount': 'sum',
+        'marketplace_fee': 'sum',
+        'del_qty': 'sum',
+        'dto_qty': 'sum',
+        'rto_qty': 'sum',
+        'actual_qty': 'sum',
+        'add_fees': 'sum',
+        'settlement_amount': 'sum'
+    }).reset_index()
+
+    # UI Columns formatting
+    df_ui = df_summary_rowwise.rename(columns={
         'month': 'Month', 'marketplace': 'Marketplace', 'brand': 'Brand', 'design': 'Design',
         'sale_amount': 'Sale Amount', 'return_amount': 'Return Amount',
         'marketplace_fee': 'Marketplace Fees', 'del_qty': 'DEL QTY',
@@ -262,7 +281,7 @@ if not df_design.empty:
         'add_fees': 'ADD', 'settlement_amount': 'Settlement Amount'
     })
     
-    # KPI Section
+    # KPI Blocks
     st.markdown(f"### 📊 Quick KPI Summary for **{selected_brand}**")
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     kpi1.metric("Total Sales", f"₹{df_ui['Sale Amount'].sum():,.2f}")
@@ -272,8 +291,8 @@ if not df_design.empty:
 
     st.write("---")
     
-    # --- Grid View Display ---
-    st.subheader(f"📋 Live Ledger Data: {selected_brand}")
+    # --- Row-wise Live Ledger Data Output ---
+    st.subheader(f"📋 Live Row-Wise Design Ledger: {selected_brand}")
     
     fmt = {
         'Sale Amount': '₹{:,.2f}', 'Return Amount': '₹{:,.2f}', 'Marketplace Fees': '₹{:,.2f}',
@@ -290,4 +309,4 @@ if not df_design.empty:
         mime='text/csv'
     )
 else:
-    st.info("Database abhi khali hai. Side panel se Brand Name aur Sheet select karke upload karein.")
+    st.info("Database abhi khali hai ya data load nahi hua. Side panel se Brand Name aur Sheet select karke upload karein.")
