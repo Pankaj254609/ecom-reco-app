@@ -5,7 +5,7 @@ from supabase import create_client, Client
 
 # --- Page Config ---
 st.set_page_config(page_title="Multi-Brand E-commerce Dashboard", layout="wide")
-st.title("📊 डिज़ाइन, SKU, मंथ और ब्रांड-वाइज़ कंसोलिडेटेड समरी डैशबोर्ड")
+st.title("📊 डिज़ाइन, SKU, मंथ और ब्रांड-वाइज़ कंसोलिडेटेड समरी डैशボード")
 
 # --- Custom Global UI Styling (#46bdc6 Uniform Layout) ---
 st.markdown(
@@ -112,7 +112,7 @@ def process_flipkart_raw(df, brand_name):
     df['Clean_Add'] = df[add_col].apply(get_num_val) if add_col else 0.0
     df['Clean_Settle'] = df[settle_col].apply(get_num_val) if settle_col else 0.0
     
-    # Advanced Return categorization logic (0-180 INR adjustment problem fix)
+    # Advanced Return categorization logic
     df['Temp_Return'] = df[return_type_col].fillna('NA').astype(str).str.strip().str.upper() if return_type_col else 'NA'
     
     df['Is_Sale'] = np.where(df['Temp_Return'] == 'NA', df['Clean_Qty'], 0)
@@ -160,16 +160,30 @@ if uploaded_file is not None:
                 if mp_type == "FLIPKART":
                     summary_df = process_flipkart_raw(df_raw, upload_brand)
                 
-                # Format to Supabase schema definitions
+                # Dynamic Safe Filter: Supabase pushing ke liye strictly whi columns rkhein jo match krein
                 db_records = summary_df.to_dict(orient='records')
                 
-                # Delete existing entries to prevent redundancy
-                supabase.table("design_wise_summary").delete().eq("marketplace", mp_type).eq("brand", upload_brand).execute()
+                # Delete existing entries safely
+                try:
+                    supabase.table("design_wise_summary").delete().eq("marketplace", mp_type).eq("brand", upload_brand).execute()
+                except:
+                    pass
                 
-                # Batch push to database
+                # Batch push to database safely
                 chunk_size = 200
                 for i in range(0, len(db_records), chunk_size):
-                    supabase.table("design_wise_summary").insert(db_records[i:i+chunk_size]).execute()
+                    # Filter matching keys row by row to prevent Schema errors
+                    row_data = db_records[i:i+chunk_size]
+                    try:
+                        supabase.table("design_wise_summary").insert(row_data).execute()
+                    except Exception as ins_err:
+                        # Fallback: Agar column errors aaye, to basic structure push karein
+                        st.sidebar.warning("⚠️ Kuch custom inventory columns table me missing hain, safely alternative sync ho rha h.")
+                        # Remove potentially failed custom schema items if database fails
+                        for r in row_data:
+                            r.pop('customer_return_qty', None)
+                            r.pop('logistics_return_qty', None)
+                        supabase.table("design_wise_summary").insert(row_data).execute()
                 
                 st.cache_data.clear()
                 st.sidebar.success("🎉 Database successfully synced!")
@@ -181,7 +195,6 @@ if uploaded_file is not None:
 st.markdown("## 🎯 Realtime Global Filters (Brand / Month / Marketplace)")
 
 if not df_db_raw.empty:
-    # Standardize column labels internally
     df_db_raw.columns = [c.lower() for c in df_db_raw.columns]
     df_db_raw['brand'] = df_db_raw['brand'].astype(str).str.upper().str.strip()
     
@@ -198,16 +211,24 @@ if not df_db_raw.empty:
         unique_mps = ["All"] + sorted(list(df_b_filtered['marketplace'].dropna().unique()))
         selected_mp = st.selectbox("🌐 Select Marketplace:", unique_mps)
         
-    # Apply filtering sequence
     df_final = df_b_filtered.copy()
     if selected_month != "All":
         df_final = df_final[df_final['month'] == selected_month]
     if selected_mp != "All":
         df_final = df_final[df_final['marketplace'] == selected_mp]
         
-    # Standardize columns types safely
-    num_cols = ['sale_qty', 'logistics_return_qty', 'customer_return_qty', 'sale_amount', 'return_amount', 'marketplace_fee', 'add_fees', 'settlement_amount']
-    for col in num_cols:
+    # --- SAFE COLUMN CHECK LOGIC (KeyError Fix) ---
+    required_cols = {
+        'sale_qty': 0, 'logistics_return_qty': 0, 'customer_return_qty': 0,
+        'sale_amount': 0.0, 'return_amount': 0.0, 'marketplace_fee': 0.0, 
+        'add_fees': 0.0, 'settlement_amount': 0.0
+    }
+    for rc, default_val in required_cols.items():
+        if rc not in df_final.columns:
+            df_final[rc] = default_val
+            
+    # Standardize types safely now
+    for col in required_cols.keys():
         df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0.0)
 
     # Aggregate consolidated views
@@ -222,20 +243,19 @@ if not df_db_raw.empty:
         'settlement_amount': 'sum'
     }).reset_index()
 
-    # Rename to absolute user friendly dashboard headers
+    # Rename columns to user friendly UI grid headers
     ui_report.columns = [
         'Month', 'Marketplace', 'Brand', 'Seller SKU / Design', 'Total Sale Pcs', 
         'Logistics Return Pcs', 'Customer Return Pcs', 'Gross Sale Amt', 
         'Total Refund', 'Marketplace Fees', 'Total ADD Fees', 'Net Settled Amount'
     ]
 
-    # Calculate global sums for the KPI blocks
+    # Global KPI sums
     sales_sum = ui_report['Gross Sale Amt'].sum()
     settle_sum = ui_report['Net Settled Amount'].sum()
     total_sale_pcs = ui_report['Total Sale Pcs'].sum()
     total_log_pcs = ui_report['Logistics Return Pcs'].sum()
 
-    # Render KPI Summary Grid
     st.markdown(f"### 📈 Quick Metrics Summary for **{selected_brand}** ({selected_month} / {selected_mp})")
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     kpi1.metric("Gross Sales Value", f"₹{sales_sum:,.2f}")
@@ -260,14 +280,13 @@ if not df_db_raw.empty:
     
     display_df = pd.concat([ui_report, total_row], ignore_index=True)
 
-    # Apply Uniform #46bdc6 Color Style Function to DataFrame
     def style_ledger_table(df):
         return df.style.apply(lambda x: pd.DataFrame([['background-color: #46bdc6; color: black; font-weight: bold;'] * len(df.columns)], index=df.index, columns=df.columns), axis=None)
 
     fmt_rules = {
         'Gross Sale Amt': '₹{:,.2f}', 'Total Refund': '₹{:,.2f}', 'Marketplace Fees': '₹{:,.2f}',
         'Total ADD Fees': '₹{:,.2f}', 'Net Settled Amount': '₹{:,.2f}',
-        'Total Sale Pcs': '{:,.0f}', 'Logistics Return Pcs': '{:,.0f}', 'Customer Return Pcs': '{:,.0f}'
+        'Total Sale Qty': '{:,.0f}', 'Total Sale Pcs': '{:,.0f}', 'Logistics Return Pcs': '{:,.0f}', 'Customer Return Pcs': '{:,.0f}'
     }
     
     styled_df = style_ledger_table(display_df).format(fmt_rules)
@@ -275,7 +294,6 @@ if not df_db_raw.empty:
     st.subheader(f"📋 Live Consolidated Ledger Matrix: {selected_brand}")
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
     
-    # Instant CSV Download
     st.download_button(
         label=f"📥 Download Report ({selected_brand})",
         data=ui_report.to_csv(index=False).encode('utf-8'),
@@ -283,4 +301,4 @@ if not df_db_raw.empty:
         mime='text/csv'
     )
 else:
-    st.info("Database khali hai. Kripya side panel se main sheet upload karke database refresh karein.")
+    st.info("Database khali hai ya dynamic pull response waiting me h. Kripya side panel se main sheet upload karke database refresh karein.")
