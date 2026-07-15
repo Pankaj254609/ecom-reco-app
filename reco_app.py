@@ -5,37 +5,28 @@ from supabase import create_client, Client
 
 # --- Page Config ---
 st.set_page_config(page_title="Multi-Brand E-commerce Dashboard", layout="wide")
-
-# --- Injection of Custom CSS for Brand Base Color (#46bdc6) ---
-st.markdown(f"""
-    <style>
-        /* Base Background Accent & Primary Color Styles */
-        div[data-testid="stMetricValue"] {{
-            color: #46bdc6 !important;
-        }}
-        .stButton>button {{
-            background-color: #46bdc6 !important;
-            color: white !important;
-            border-radius: 6px;
-            border: none;
-        }}
-        .stButton>button:hover {{
-            background-color: #35a4ad !important;
-            color: white !important;
-        }}
-        /* Subheaders and highlights matching the brand color */
-        h2, h3, h1 {{
-            color: #1e6b70 !important;
-        }}
-        /* Highlight Total Row in Dataframe */
-        .highlight-total {{
-            background-color: rgba(70, 189, 198, 0.2) !important;
-            font-weight: bold !important;
-        }}
-    </style>
-""", unsafe_allow_html=True)
-
 st.title("📊 डिज़ाइन-वाइज़, मंथ-वाइज़ और ब्रांड-वाइज़ ओवरऑल समरी डैशबोर्ड")
+
+# --- Custom Styling (Background #46bdc6 & Black Text) ---
+st.markdown(
+    """
+    <style>
+    /* Main container metrics & general tables override styling */
+    [data-testid="stMetricValue"] {
+        color: black !important;
+    }
+    div[data-testid="stDataFrame"] table th {
+        background-color: #46bdc6 !important;
+        color: black !important;
+        font-weight: bold !important;
+    }
+    div[data-testid="stDataFrame"] table td {
+        color: black !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 # --- Direct Supabase Database Connection ---
 @st.cache_resource
@@ -257,7 +248,7 @@ if not df_design.empty:
     with c1:
         unique_brands_db = sorted(list(df_display['brand'].dropna().unique()))
         if not unique_brands_db: unique_brands_db = ["RECOAPPPY", "TERRADESI"]
-        selected_brand = st.selectbox("⭐ Select Brand:", unique_brands_db, index=0)
+        selected_brand = st.selectbox("⭐ Select Brand:", unique_brands_db)
         
     with c2:
         df_brand_filtered = df_display[df_display['brand'] == selected_brand]
@@ -281,6 +272,7 @@ if not df_design.empty:
         else:
             df_final[col] = 0.0
 
+    # Groupby to generate clean layout row wise
     df_summary_rowwise = df_final.groupby(['month', 'marketplace', 'brand', 'design']).agg({
         'sale_amount': 'sum',
         'return_amount': 'sum',
@@ -293,7 +285,6 @@ if not df_design.empty:
         'settlement_amount': 'sum'
     }).reset_index()
 
-    # Rename UI columns
     df_ui = df_summary_rowwise.rename(columns={
         'month': 'Month', 'marketplace': 'Marketplace', 'brand': 'Brand', 'design': 'Design',
         'sale_amount': 'Sale Amount', 'return_amount': 'Return Amount',
@@ -301,54 +292,56 @@ if not df_design.empty:
         'dto_qty': 'DTO QTY', 'rto_qty': 'RTO QTY', 'actual_qty': 'ACTUAL DEL QTY',
         'add_fees': 'ADD', 'settlement_amount': 'Settlement Amount'
     })
-    
-    # --- ADDING TOTAL ROW AT THE BOTTOM OF THE DATA ---
-    if not df_ui.empty:
-        total_values = {
-            'Month': 'TOTAL',
-            'Marketplace': '-',
-            'Brand': '-',
-            'Design': 'All Designs Total',
-            'Sale Amount': df_ui['Sale Amount'].sum(),
-            'Return Amount': df_ui['Return Amount'].sum(),
-            'Marketplace Fees': df_ui['Marketplace Fees'].sum(),
-            'DEL QTY': df_ui['DEL QTY'].sum(),
-            'DTO QTY': df_ui['DTO QTY'].sum(),
-            'RTO QTY': df_ui['RTO QTY'].sum(),
-            'ACTUAL DEL QTY': df_ui['ACTUAL DEL QTY'].sum(),
-            'ADD': df_ui['ADD'].sum(),
-            'Settlement Amount': df_ui['Settlement Amount'].sum()
-        }
-        df_total_row = pd.DataFrame([total_values])
-        df_ui_with_total = pd.concat([df_ui, df_total_row], ignore_index=True)
-    else:
-        df_ui_with_total = df_ui.copy()
 
+    # --- TOTAL ROW INJECTION ---
+    # Har numeric category ki pure data ki total row calculate ho rahi hai
+    total_row = pd.DataFrame([{
+        'Month': 'TOTAL', 'Marketplace': '', 'Brand': '', 'Design': '',
+        'Sale Amount': df_ui['Sale Amount'].sum(),
+        'Return Amount': df_ui['Return Amount'].sum(),
+        'Marketplace Fees': df_ui['Marketplace Fees'].sum(),
+        'DEL QTY': df_ui['DEL QTY'].sum(),
+        'DTO QTY': df_ui['DTO QTY'].sum(),
+        'RTO QTY': df_ui['RTO QTY'].sum(),
+        'ACTUAL DEL QTY': df_ui['ACTUAL DEL QTY'].sum(),
+        'ADD': df_ui['ADD'].sum(),
+        'Settlement Amount': df_ui['Settlement Amount'].sum()
+    }])
+    df_ui = pd.concat([df_ui, total_row], ignore_index=True)
+    
     # KPI Blocks
     st.markdown(f"### 📊 Quick KPI Summary for **{selected_brand}**")
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("Total Sales", f"₹{df_ui['Sale Amount'].sum():,.2f}")
-    kpi2.metric("Total Settlement", f"₹{df_ui['Settlement Amount'].sum():,.2f}")
-    kpi3.metric("DEL QTY (Actual)", f"{int(df_ui['ACTUAL DEL QTY'].sum()):,} Pcs")
-    kpi4.metric("Total Return QTY", f"{int(df_ui['DTO QTY'].sum() + df_ui['RTO QTY'].sum()):,} Pcs")
+    kpi1.metric("Total Sales", f"₹{total_row['Sale Amount'].values[0]:,.2f}")
+    kpi2.metric("Total Settlement", f"₹{total_row['Settlement Amount'].values[0]:,.2f}")
+    kpi3.metric("DEL QTY (Actual)", f"{int(total_row['ACTUAL DEL QTY'].values[0]):,} Pcs")
+    kpi4.metric("Total Return QTY", f"{int(total_row['DTO QTY'].values[0] + total_row['RTO QTY'].values[0]):,} Pcs")
 
     st.write("---")
     
-    # --- Row-wise Live Ledger Data Output with Formatter ---
+    # --- Row-wise Live Ledger Data Output ---
     st.subheader(f"📋 Live Row-Wise Design Ledger: {selected_brand}")
     
+    # Text formatter
+    def highlight_total(row):
+        # Background highlight applied seamlessly via explicit system hex constraints
+        if row['Month'] == 'TOTAL':
+            return ['background-color: #46bdc6; color: black; font-weight: bold;'] * len(row)
+        return ['color: black;'] * len(row)
+
     fmt = {
         'Sale Amount': '₹{:,.2f}', 'Return Amount': '₹{:,.2f}', 'Marketplace Fees': '₹{:,.2f}',
         'ADD': '₹{:,.2f}', 'Settlement Amount': '₹{:,.2f}',
         'DEL QTY': '{:,.0f}', 'DTO QTY': '{:,.0f}', 'RTO QTY': '{:,.0f}', 'ACTUAL DEL QTY': '{:,.0f}'
     }
     
-    # Apply styler for row level calculations
-    st.dataframe(df_ui_with_total.style.format(fmt), use_container_width=True, hide_index=True)
+    styled_df = df_ui.style.apply(highlight_total, axis=1).format(fmt)
+    
+    st.dataframe(styled_df, use_container_width=True, hide_index=True)
     
     st.download_button(
         label=f"📥 Download Report ({selected_brand})",
-        data=df_ui_with_total.to_csv(index=False).encode('utf-8'),
+        data=df_ui.to_csv(index=False).encode('utf-8'),
         file_name=f'{selected_brand}_Summary_Report.csv',
         mime='text/csv'
     )
