@@ -4,8 +4,8 @@ import numpy as np
 from supabase import create_client, Client
 
 # --- Page Config ---
-st.set_page_config(page_title="VIDA LOCA RECO - Dashboard", layout="wide")
-st.title("📊 डिज़ाइन, SKU, मंथ और ब्रांड-वाइज़ कंसोलिडेटेड समरी डैशबोर्ड - VIDA LOCA RECO")
+st.set_page_config(page_title="VIDA LOCA RECO", layout="wide")
+st.title("📊 VIDA LOCA RECO")
 
 # --- Custom Global UI Styling (#46bdc6 Uniform Layout) ---
 st.markdown(
@@ -142,7 +142,7 @@ def process_flipkart_raw(df, brand_name):
 
 # --- Sidebar Upload Panel ---
 st.sidebar.markdown("## 📤 Cloud Data Sync Center")
-upload_brand = st.sidebar.text_input("Brand Name:", "VIDA LOCA").strip().upper()
+upload_brand = st.sidebar.text_input("Brand Name:", "RECOAPPPY").strip().upper()
 mp_type = st.sidebar.selectbox("Marketplace:", ["FLIPKART", "AMAZON", "MEESHO"])
 uploaded_file = st.sidebar.file_uploader("Settle Payment Sheet Upload Karein", type=["csv", "xlsx"])
 
@@ -160,7 +160,7 @@ if uploaded_file is not None:
                 if mp_type == "FLIPKART":
                     summary_df = process_flipkart_raw(df_raw, upload_brand)
                 
-                # Format to Supabase schema definitions
+                # Dynamic Safe Filter
                 db_records = summary_df.to_dict(orient='records')
                 
                 # Delete existing entries safely
@@ -169,14 +169,14 @@ if uploaded_file is not None:
                 except:
                     pass
                 
-                # Batch push to database
+                # Batch push to database safely
                 chunk_size = 200
                 for i in range(0, len(db_records), chunk_size):
                     row_data = db_records[i:i+chunk_size]
                     try:
                         supabase.table("design_wise_summary").insert(row_data).execute()
                     except Exception as ins_err:
-                        # Fallback schema cleaning in case database column types miss
+                        st.sidebar.warning("⚠️ Database columns mismatch fallback activated.")
                         for r in row_data:
                             r.pop('customer_return_qty', None)
                             r.pop('logistics_return_qty', None)
@@ -208,14 +208,13 @@ if not df_db_raw.empty:
         unique_mps = ["All"] + sorted(list(df_b_filtered['marketplace'].dropna().unique()))
         selected_mp = st.selectbox("🌐 Select Marketplace:", unique_mps)
         
-    # Apply filters
     df_final = df_b_filtered.copy()
     if selected_month != "All":
         df_final = df_final[df_final['month'] == selected_month]
     if selected_mp != "All":
         df_final = df_final[df_final['marketplace'] == selected_mp]
         
-    # Safe checks for dynamic columns
+    # --- SAFE COLUMN CHECK LOGIC ---
     required_cols = {
         'sale_qty': 0, 'logistics_return_qty': 0, 'customer_return_qty': 0,
         'sale_amount': 0.0, 'return_amount': 0.0, 'marketplace_fee': 0.0, 
@@ -225,10 +224,11 @@ if not df_db_raw.empty:
         if rc not in df_final.columns:
             df_final[rc] = default_val
             
+    # Standardize types safely
     for col in required_cols.keys():
         df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0.0)
 
-    # Group views
+    # Aggregate consolidated views
     ui_report = df_final.groupby(['month', 'marketplace', 'brand', 'design']).agg({
         'sale_qty': 'sum',
         'logistics_return_qty': 'sum',
@@ -240,14 +240,14 @@ if not df_db_raw.empty:
         'settlement_amount': 'sum'
     }).reset_index()
 
-    # Columns renaming
+    # Rename columns to user friendly UI grid headers
     ui_report.columns = [
         'Month', 'Marketplace', 'Brand', 'Seller SKU / Design', 'Total Sale Pcs', 
         'Logistics Return Pcs', 'Customer Return Pcs', 'Gross Sale Amt', 
         'Total Refund', 'Marketplace Fees', 'Total ADD Fees', 'Net Settled Amount'
     ]
 
-    # Metrics
+    # Global KPI sums
     sales_sum = ui_report['Gross Sale Amt'].sum()
     settle_sum = ui_report['Net Settled Amount'].sum()
     total_sale_pcs = ui_report['Total Sale Pcs'].sum()
@@ -262,7 +262,7 @@ if not df_db_raw.empty:
 
     st.write("---")
     
-    # Dynamic bottom totals row
+    # Injecting Bottom Dynamic TOTAL Row
     total_row = pd.DataFrame([{
         'Month': 'TOTAL', 'Marketplace': '', 'Brand': '', 'Seller SKU / Design': '',
         'Total Sale Pcs': ui_report['Total Sale Pcs'].sum(),
@@ -298,4 +298,4 @@ if not df_db_raw.empty:
         mime='text/csv'
     )
 else:
-    st.info("Database khali hai ya processing pending hai. Sidebar se file upload karein.")
+    st.info("Database khali hai ya dynamic pull response waiting me h. Kripya side panel se main sheet upload karke database refresh karein.")
