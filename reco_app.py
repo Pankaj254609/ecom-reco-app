@@ -7,28 +7,28 @@ from supabase import create_client, Client
 st.set_page_config(page_title="Multi-Brand E-commerce Dashboard", layout="wide")
 st.title("📊 डिज़ाइन-वाइज़, मंथ-वाइज़ और ब्रांड-वाइज़ ओवरऑल समरी डैशबोर्ड")
 
-# --- Custom Global UI Styling (Background #46bdc6 & Black Text) ---
+# --- Custom Global UI Styling (As per your Exact Screenshots) ---
 st.markdown(
     """
     <style>
-    /* KPI Metric Values to Black */
+    /* KPI Metric Styling */
     [data-testid="stMetricValue"] {
-        color: black !important;
+        color: white !important;
     }
     
-    /* Table Header Base Styling */
+    /* Table Header Layout (Dark Corporate Blue/Cyan color matching screenshot) */
     div[data-testid="stDataFrame"] table th {
-        background-color: #46bdc6 !important;
-        color: black !important;
+        background-color: #0b5793 !important;
+        color: white !important;
         font-weight: bold !important;
-        border: 1px solid #3197a0 !important;
+        border: 1px solid #083f6b !important;
         text-align: center !important;
+        font-size: 14px !important;
     }
     
-    /* Table Data Cells Base Layout Style */
+    /* Table Data Cells Base (For complete crisp layout lines) */
     div[data-testid="stDataFrame"] table td {
-        color: black !important;
-        border: 1px solid #d3eaea !important;
+        border: 1px solid #7bc5cb !important;
     }
     </style>
     """,
@@ -279,7 +279,6 @@ if not df_design.empty:
         else:
             df_final[col] = 0.0
 
-    # Groupby dynamic row-wise data aggregation
     df_summary_rowwise = df_final.groupby(['month', 'marketplace', 'brand', 'design']).agg({
         'sale_amount': 'sum',
         'return_amount': 'sum',
@@ -300,7 +299,7 @@ if not df_design.empty:
         'add_fees': 'ADD', 'settlement_amount': 'Settlement Amount'
     })
 
-    # --- TOTAL ROW GENERATION ---
+    # --- TOTAL ROW INJECTION ---
     total_row = pd.DataFrame([{
         'Month': 'TOTAL', 'Marketplace': '', 'Brand': '', 'Design': '',
         'Sale Amount': df_ui['Sale Amount'].sum(),
@@ -313,32 +312,39 @@ if not df_design.empty:
         'ADD': df_ui['ADD'].sum(),
         'Settlement Amount': df_ui['Settlement Amount'].sum()
     }])
+    
+    # Pure display metrics calculation base
+    sales_val = total_row['Sale Amount'].values[0]
+    settle_val = total_row['Settlement Amount'].values[0]
+    act_del = total_row['ACTUAL DEL QTY'].values[0]
+    ret_tot = total_row['DTO QTY'].values[0] + total_row['RTO QTY'].values[0]
+    
     df_ui = pd.concat([df_ui, total_row], ignore_index=True)
     
     # KPI Blocks Summary Section
     st.markdown(f"### 📊 Quick KPI Summary for **{selected_brand}**")
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("Total Sales", f"₹{total_row['Sale Amount'].values[0]:,.2f}")
-    kpi2.metric("Total Settlement", f"₹{total_row['Settlement Amount'].values[0]:,.2f}")
-    kpi3.metric("DEL QTY (Actual)", f"{int(total_row['ACTUAL DEL QTY'].values[0]):,} Pcs")
-    kpi4.metric("Total Return QTY", f"{int(total_row['DTO QTY'].values[0] + total_row['RTO QTY'].values[0]):,} Pcs")
+    kpi1.metric("Total Sales", f"₹{sales_val:,.2f}")
+    kpi2.metric("Total Settlement", f"₹{settle_val:,.2f}")
+    kpi3.metric("DEL QTY (Actual)", f"{int(act_del):,} Pcs")
+    kpi4.metric("Total Return QTY", f"{int(ret_tot):,} Pcs")
 
     st.write("---")
     
     # --- Row-wise Live Ledger Display Grid ---
     st.subheader(f"📋 Live Row-Wise Design Ledger: {selected_brand}")
     
-    # Dynamic styling function for total & clean rows color combination
+    # Dynamic styling matching screenshot color rules
     def style_ledger_table(df):
         styler = df.style
         
-        # Pure data blocks default row styling configuration (Cyan light mesh)
-        default_style = pd.DataFrame([['background-color: #d8f2f4; color: black; border: 1px solid #c0e3e6;'] * len(df.columns)], index=df.index, columns=df.columns)
+        # Pure data cells matching Screenshot 2 (#46bdc6 variant light background with black text)
+        default_style = pd.DataFrame([['background-color: #4dcad4; color: black; font-weight: 500;'] * len(df.columns)], index=df.index, columns=df.columns)
         
-        # Inject dynamic highlight properties inside TOTAL record matching rows
+        # TOTAL row highlighting base rule matching Screenshot 3 & 4
         for idx, row in df.iterrows():
             if row['Month'] == 'TOTAL':
-                default_style.loc[idx] = ['background-color: #46bdc6; color: black; font-weight: bold; border-top: 2px solid black; border-bottom: 2px solid black;'] * len(df.columns)
+                default_style.loc[idx] = ['background-color: #46bdc6; color: black; font-weight: bold; font-size: 14px;'] * len(df.columns)
                 
         return styler.apply(lambda d: default_style, axis=None)
 
