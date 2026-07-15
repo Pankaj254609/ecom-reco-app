@@ -7,28 +7,34 @@ from supabase import create_client, Client
 st.set_page_config(page_title="Multi-Brand E-commerce Dashboard", layout="wide")
 st.title("📊 डिज़ाइन-वाइज़, मंथ-वाइज़ और ब्रांड-वाइज़ ओवरऑल समरी डैशबोर्ड")
 
-# --- Custom Global UI Styling (As per your Exact Screenshots) ---
+# --- Custom Global UI Styling (Background #46bdc6 & Black Text Everywhere) ---
 st.markdown(
     """
     <style>
-    /* KPI Metric Styling */
-    [data-testid="stMetricValue"] {
-        color: white !important;
+    /* KPI Metric Styling to Black Text and Light Cyan Background */
+    [data-testid="stMetric"] {
+        background-color: #46bdc6 !important;
+        padding: 15px !important;
+        border-radius: 8px !important;
+        border: 1px solid #3197a0 !important;
+    }
+    [data-testid="stMetricValue"], [data-testid="stMetricLabel"] {
+        color: black !important;
     }
     
-    /* Table Header Layout (Dark Corporate Blue/Cyan color matching screenshot) */
+    /* Table Header Layout (Background #46bdc6 & Black Text) */
     div[data-testid="stDataFrame"] table th {
-        background-color: #0b5793 !important;
-        color: white !important;
+        background-color: #46bdc6 !important;
+        color: black !important;
         font-weight: bold !important;
-        border: 1px solid #083f6b !important;
+        border: 1px solid #3197a0 !important;
         text-align: center !important;
         font-size: 14px !important;
     }
     
-    /* Table Data Cells Base (For complete crisp layout lines) */
+    /* Table Data Cells Base Layout */
     div[data-testid="stDataFrame"] table td {
-        border: 1px solid #7bc5cb !important;
+        border: 1px solid #3197a0 !important;
     }
     </style>
     """,
@@ -313,7 +319,6 @@ if not df_design.empty:
         'Settlement Amount': df_ui['Settlement Amount'].sum()
     }])
     
-    # Pure display metrics calculation base
     sales_val = total_row['Sale Amount'].values[0]
     settle_val = total_row['Settlement Amount'].values[0]
     act_del = total_row['ACTUAL DEL QTY'].values[0]
@@ -334,19 +339,12 @@ if not df_design.empty:
     # --- Row-wise Live Ledger Display Grid ---
     st.subheader(f"📋 Live Row-Wise Design Ledger: {selected_brand}")
     
-    # Dynamic styling matching screenshot color rules
+    # Pure uniform styling function: All headers, data rows and total rows will use #46bdc6 background & Black Text
     def style_ledger_table(df):
         styler = df.style
-        
-        # Pure data cells matching Screenshot 2 (#46bdc6 variant light background with black text)
-        default_style = pd.DataFrame([['background-color: #4dcad4; color: black; font-weight: 500;'] * len(df.columns)], index=df.index, columns=df.columns)
-        
-        # TOTAL row highlighting base rule matching Screenshot 3 & 4
-        for idx, row in df.iterrows():
-            if row['Month'] == 'TOTAL':
-                default_style.loc[idx] = ['background-color: #46bdc6; color: black; font-weight: bold; font-size: 14px;'] * len(df.columns)
-                
-        return styler.apply(lambda d: default_style, axis=None)
+        # pure uniform color template mapping rule
+        full_uniform_style = pd.DataFrame([['background-color: #46bdc6; color: black; font-weight: bold;'] * len(df.columns)], index=df.index, columns=df.columns)
+        return styler.apply(lambda d: full_uniform_style, axis=None)
 
     fmt = {
         'Sale Amount': '₹{:,.2f}', 'Return Amount': '₹{:,.2f}', 'Marketplace Fees': '₹{:,.2f}',
