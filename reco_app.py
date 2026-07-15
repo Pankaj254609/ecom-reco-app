@@ -7,21 +7,28 @@ from supabase import create_client, Client
 st.set_page_config(page_title="Multi-Brand E-commerce Dashboard", layout="wide")
 st.title("📊 डिज़ाइन-वाइज़, मंथ-वाइज़ और ब्रांड-वाइज़ ओवरऑल समरी डैशबोर्ड")
 
-# --- Custom Styling (Background #46bdc6 & Black Text) ---
+# --- Custom Global UI Styling (Background #46bdc6 & Black Text) ---
 st.markdown(
     """
     <style>
-    /* Main container metrics & general tables override styling */
+    /* KPI Metric Values to Black */
     [data-testid="stMetricValue"] {
         color: black !important;
     }
+    
+    /* Table Header Base Styling */
     div[data-testid="stDataFrame"] table th {
         background-color: #46bdc6 !important;
         color: black !important;
         font-weight: bold !important;
+        border: 1px solid #3197a0 !important;
+        text-align: center !important;
     }
+    
+    /* Table Data Cells Base Layout Style */
     div[data-testid="stDataFrame"] table td {
         color: black !important;
+        border: 1px solid #d3eaea !important;
     }
     </style>
     """,
@@ -272,7 +279,7 @@ if not df_design.empty:
         else:
             df_final[col] = 0.0
 
-    # Groupby to generate clean layout row wise
+    # Groupby dynamic row-wise data aggregation
     df_summary_rowwise = df_final.groupby(['month', 'marketplace', 'brand', 'design']).agg({
         'sale_amount': 'sum',
         'return_amount': 'sum',
@@ -293,8 +300,7 @@ if not df_design.empty:
         'add_fees': 'ADD', 'settlement_amount': 'Settlement Amount'
     })
 
-    # --- TOTAL ROW INJECTION ---
-    # Har numeric category ki pure data ki total row calculate ho rahi hai
+    # --- TOTAL ROW GENERATION ---
     total_row = pd.DataFrame([{
         'Month': 'TOTAL', 'Marketplace': '', 'Brand': '', 'Design': '',
         'Sale Amount': df_ui['Sale Amount'].sum(),
@@ -309,7 +315,7 @@ if not df_design.empty:
     }])
     df_ui = pd.concat([df_ui, total_row], ignore_index=True)
     
-    # KPI Blocks
+    # KPI Blocks Summary Section
     st.markdown(f"### 📊 Quick KPI Summary for **{selected_brand}**")
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     kpi1.metric("Total Sales", f"₹{total_row['Sale Amount'].values[0]:,.2f}")
@@ -319,15 +325,22 @@ if not df_design.empty:
 
     st.write("---")
     
-    # --- Row-wise Live Ledger Data Output ---
+    # --- Row-wise Live Ledger Display Grid ---
     st.subheader(f"📋 Live Row-Wise Design Ledger: {selected_brand}")
     
-    # Text formatter
-    def highlight_total(row):
-        # Background highlight applied seamlessly via explicit system hex constraints
-        if row['Month'] == 'TOTAL':
-            return ['background-color: #46bdc6; color: black; font-weight: bold;'] * len(row)
-        return ['color: black;'] * len(row)
+    # Dynamic styling function for total & clean rows color combination
+    def style_ledger_table(df):
+        styler = df.style
+        
+        # Pure data blocks default row styling configuration (Cyan light mesh)
+        default_style = pd.DataFrame([['background-color: #d8f2f4; color: black; border: 1px solid #c0e3e6;'] * len(df.columns)], index=df.index, columns=df.columns)
+        
+        # Inject dynamic highlight properties inside TOTAL record matching rows
+        for idx, row in df.iterrows():
+            if row['Month'] == 'TOTAL':
+                default_style.loc[idx] = ['background-color: #46bdc6; color: black; font-weight: bold; border-top: 2px solid black; border-bottom: 2px solid black;'] * len(df.columns)
+                
+        return styler.apply(lambda d: default_style, axis=None)
 
     fmt = {
         'Sale Amount': '₹{:,.2f}', 'Return Amount': '₹{:,.2f}', 'Marketplace Fees': '₹{:,.2f}',
@@ -335,7 +348,7 @@ if not df_design.empty:
         'DEL QTY': '{:,.0f}', 'DTO QTY': '{:,.0f}', 'RTO QTY': '{:,.0f}', 'ACTUAL DEL QTY': '{:,.0f}'
     }
     
-    styled_df = df_ui.style.apply(highlight_total, axis=1).format(fmt)
+    styled_df = style_ledger_table(df_ui).format(fmt)
     
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
     
