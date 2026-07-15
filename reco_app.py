@@ -1,13 +1,12 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from supabase import create_client, Client
 
 # --- Page Config ---
-st.set_page_config(page_title="Multi-Brand E-commerce Dashboard", layout="wide")
-st.title("📊 डिज़ाइन-वाइज़, मंथ-वाइज़ और ब्रांड-वाइज़ ओवरऑल समरी डैशबोर्ड")
+st.set_page_config(page_title="Flipkart SKU Wise Reconciliation", layout="wide")
+st.title("📊 Flipkart Order Item ID & SKU Wise Real Settlement Summary")
 
-# --- Custom Global UI Styling (Uniform #46bdc6 Color Style) ---
+# --- Custom Global UI Styling (Uniform #46bdc6 Color Style as requested) ---
 st.markdown(
     """
     <style>
@@ -35,20 +34,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# --- Direct Supabase Database Connection ---
-@st.cache_resource
-def init_supabase() -> Client:
-    url = "https://tpbbngotolgthytgjarp.supabase.co"
-    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRwYmJuZ290b2xndGh5dGdqYXJwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3MzY3NTMsImV4cCI6MjA5OTMxMjc1M30.0uxeXOsMDbAjtAdT_RZlb6NAs-OBlydKr13-lv9l5Lw"
-    return create_client(url, key)
-
-try:
-    supabase = init_supabase()
-except Exception as e:
-    st.error(f"Supabase connection error: {e}")
-    st.stop()
-
-# --- Helper to Clean Numbers ---
+# --- Helper to Clean Numbers Safely ---
 def get_num_val(val):
     if pd.isna(val):
         return 0.0
@@ -59,46 +45,63 @@ def get_num_val(val):
         return 0.0
 
 # --- ADVANCED FLIPKART SKU & ORDER ITEM ID PROCESSOR ---
-def process_flipkart_sku_wise(df, brand_name):
-    # Strip whitespaces from columns
+def process_flipkart_sku_wise(df):
+    # Standardize Column Names: Strip spaces, lowercase matching to remove 'Quantity' key errors
     df.columns = [str(c).strip() for c in df.columns]
     
-    # 1. Clean the essential numeric columns first
-    df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce').fillna(0).astype(int)
-    df['Sale Amount (Rs.)'] = df['Sale Amount (Rs.)'].apply(get_num_val)
-    df['Refund (Rs.)'] = df['Refund (Rs.)'].apply(get_num_val)
-    df['Marketplace Fee (Rs.)'] = df['Marketplace Fee (Rs.)'].apply(get_num_val)
-    df['Taxes (Rs.)'] = df['Taxes (Rs.)'].apply(get_num_val)
+    # Dynamic column mapping to find matching column even if case differs
+    col_mapping = {c.lower(): c for c in df.columns}
     
-    # Optional Columns Handling safely
-    add_col = 'Settlement Value ADD' if 'Settlement Value ADD' in df.columns else 'Offer Adjustments (Rs.)'
-    df['ADD_VAL'] = df[add_col].apply(get_num_val) if add_col in df.columns else 0.0
-    df['Bank Settlement'] = df['Bank Settlement Value (Rs.)'].apply(get_num_val) if 'Bank Settlement Value (Rs.)' in df.columns else 0.0
+    qty_col = col_mapping.get('quantity', None)
+    sale_col = col_mapping.get('sale amount (rs.)', col_mapping.get('sale amount', None))
+    refund_col = col_mapping.get('refund (rs.)', col_mapping.get('refund', None))
+    fee_col = col_mapping.get('marketplace fee (rs.)', col_mapping.get('marketplace fee', None))
+    tax_col = col_mapping.get('taxes (rs.)', col_mapping.get('taxes', None))
+    add_col = col_mapping.get('offer adjustments (rs.)', col_mapping.get('offer adjustments', col_mapping.get('settlement value add', None)))
+    settle_col = col_mapping.get('bank settlement value (rs.)', col_mapping.get('bank settlement value', col_mapping.get('bank settlement', None)))
     
-    # 2. Identify Return Categories accurately based on 'Return Type' status
-    df['Return Type'] = df['Return Type'].fillna('NA').astype(str).str.strip().str.upper()
+    order_item_col = col_mapping.get('order item id', None)
+    sku_col = col_mapping.get('seller sku', col_mapping.get('sku', None))
+    return_type_col = col_mapping.get('return type', None)
+
+    # Validations
+    if not qty_col or not order_item_col:
+        st.error(f"Sheet mein zaroori columns nahi mile! Available columns: {list(df.columns)}")
+        st.stop()
+
+    # 1. Clean the essential numeric columns
+    df['Clean_Qty'] = pd.to_numeric(df[qty_col], errors='coerce').fillna(0).astype(int)
+    df['Clean_Sale'] = df[sale_col].apply(get_num_val) if sale_col else 0.0
+    df['Clean_Refund'] = df[refund_col].apply(get_num_val) if refund_col else 0.0
+    df['Clean_Fee'] = df[fee_col].apply(get_num_val) if fee_col else 0.0
+    df['Clean_Tax'] = df[tax_col].apply(get_num_val) if tax_col else 0.0
+    df['Clean_Add'] = df[add_col].apply(get_num_val) if add_col else 0.0
+    df['Clean_Settle'] = df[settle_col].apply(get_num_val) if settle_col else 0.0
     
-    # Logic for counting real pieces/orders status wise
-    df['Is_Sale'] = np.where((df['Return Type'] == 'NA') & (df['Quantity'] > 0), df['Quantity'], 0)
-    df['Logistics_Return'] = np.where(df['Return Type'].str.contains('RTO|DTO|COURIER', case=False, na=False), df['Quantity'], 0)
-    df['Customer_Return'] = np.where(df['Return Type'].str.contains('CUSTOMER', case=False, na=False), df['Quantity'], 0)
+    # 2. Extract Return Categories
+    df['Temp_Return'] = df[return_type_col].fillna('NA').astype(str).str.strip().str.upper() if return_type_col else 'NA'
     
-    # 3. Aggregating data at unique Order Item ID + SKU Level to resolve 0-180 row problem
-    groupby_cols = ['Order item ID', 'Seller SKU'] if 'Seller SKU' in df.columns else ['Order item ID', 'Order ID']
+    # Calculate conditional units logic
+    df['Is_Sale'] = np.where((df['Temp_Return'] == 'NA') & (df['Clean_Qty'] > 0), df['Clean_Qty'], 0)
+    df['Logistics_Return'] = np.where(df['Temp_Return'].str.contains('RTO|DTO|COURIER', case=False, na=False), df['Clean_Qty'], 0)
+    df['Customer_Return'] = np.where(df['Temp_Return'].str.contains('CUSTOMER', case=False, na=False), df['Clean_Qty'], 0)
     
-    sku_summary = df.groupby(groupby_cols).agg({
+    # 3. Group by Order Item ID and SKU to blend 0-180 INR adjustment rows
+    group_keys = [df[order_item_col], df[sku_col] if sku_col else df[order_item_col]]
+    
+    sku_summary = df.groupby(group_keys).agg({
         'Is_Sale': 'sum',
         'Logistics_Return': 'sum',
         'Customer_Return': 'sum',
-        'Sale Amount (Rs.)': 'sum',
-        'Refund (Rs.)': 'sum',
-        'Marketplace Fee (Rs.)': 'sum',
-        'Taxes (Rs.)': 'sum',
-        'ADD_VAL': 'sum',
-        'Bank Settlement': 'sum'
+        'Clean_Sale': 'sum',
+        'Clean_Refund': 'sum',
+        'Clean_Fee': 'sum',
+        'Clean_Tax': 'sum',
+        'Clean_Add': 'sum',
+        'Clean_Settle': 'sum'
     }).reset_index()
     
-    # Rename columns to provide absolute clarity
+    # Rename for professional UI presentation
     sku_summary.columns = [
         'Order Item ID', 'Seller SKU', 'Total Sale Qty', 'Total Logistics Return Qty', 
         'Total Customer Return Qty', 'Gross Sale Amt', 'Total Refund', 
@@ -108,10 +111,8 @@ def process_flipkart_sku_wise(df, brand_name):
     return sku_summary
 
 # --- Sidebar Uploading Panel ---
-st.sidebar.markdown("## 📤 Sheet Upload & Management")
-upload_brand = st.sidebar.text_input("Brand Name Likhein:", "RECOAPPPY").strip().upper()
-mp_type = st.sidebar.selectbox("Marketplace Select Karein:", ["FLIPKART", "AMAZON", "MEESHO"])
-uploaded_file = st.sidebar.file_uploader(f"{mp_type} Ki Sheet Upload Karein", type=["xlsx", "csv"])
+st.sidebar.markdown("## 📤 Sheet Upload Panel")
+uploaded_file = st.sidebar.file_uploader("Flipkart 'Orders' Sheet CSV Upload Karein", type=["csv", "xlsx"])
 
 # --- Main Logic Dashboard ---
 if uploaded_file is not None:
@@ -121,64 +122,60 @@ if uploaded_file is not None:
         else:
             df_raw = pd.read_excel(uploaded_file)
             
-        st.success("File uploaded successfully! Processing details...")
+        # Running the dynamic item-sku processor
+        processed_report = process_flipkart_sku_wise(df_raw)
         
-        if mp_type == "FLIPKART":
-            # Running the dedicated item-sku tracker
-            processed_report = process_flipkart_sku_wise(df_raw, upload_brand)
-            
-            # Show Metrics Row
-            st.markdown(f"### 📈 SKU-Wise Summary Report Overview ({upload_brand})")
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Gross Sales", f"₹{processed_report['Gross Sale Amt'].sum():,.2f}")
-            k2.metric("Net Settled Amount", f"₹{processed_report['Net Settled Amount'].sum():,.2f}")
-            k3.metric("Total Logistics Return Pcs", f"{int(processed_report['Total Logistics Return Qty'].sum())} Pcs")
-            k4.metric("Total Customer Return Pcs", f"{int(processed_report['Total Customer Return Qty'].sum())} Pcs")
-            
-            st.write("---")
-            
-            # Add TOTAL row at the bottom of the table
-            total_row = pd.DataFrame([{
-                'Order Item ID': 'TOTAL', 'Seller SKU': '',
-                'Total Sale Qty': processed_report['Total Sale Qty'].sum(),
-                'Total Logistics Return Qty': processed_report['Total Logistics Return Qty'].sum(),
-                'Total Customer Return Qty': processed_report['Total Customer Return Qty'].sum(),
-                'Gross Sale Amt': processed_report['Gross Sale Amt'].sum(),
-                'Total Refund': processed_report['Total Refund'].sum(),
-                'Marketplace Fees': processed_report['Marketplace Fees'].sum(),
-                'Taxes': processed_report['Taxes'].sum(),
-                'Total ADD Fees': processed_report['Total ADD Fees'].sum(),
-                'Net Settled Amount': processed_report['Net Settled Amount'].sum()
-            }])
-            
-            display_df = pd.concat([processed_report, total_row], ignore_index=True)
-            
-            # Dynamic Uniform #46bdc6 Table Formatter
-            def style_full_table(df):
-                return df.style.apply(lambda x: pd.DataFrame([['background-color: #46bdc6; color: black; font-weight: bold;'] * len(df.columns)], index=df.index, columns=df.columns), axis=None)
-            
-            fmt = {
-                'Gross Sale Amt': '₹{:,.2f}', 'Total Refund': '₹{:,.2f}', 'Marketplace Fees': '₹{:,.2f}',
-                'Taxes': '₹{:,.2f}', 'Total ADD Fees': '₹{:,.2f}', 'Net Settled Amount': '₹{:,.2f}'
-            }
-            
-            styled_final = style_full_table(display_df).format(fmt)
-            
-            # Display live grid
-            st.subheader("📋 Live Order Item ID & SKU Wise Consolidated Sheet")
-            st.dataframe(styled_final, use_container_width=True, hide_index=True)
-            
-            # Download report button
-            st.download_button(
-                label="📥 Download This SKU Wise Settled Report",
-                data=processed_report.to_csv(index=False).encode('utf-8'),
-                file_name=f'{upload_brand}_SKU_Wise_Settlement.csv',
-                mime='text/csv'
-            )
-        else:
-            st.info("Kripya Flipkart select karein is absolute item mapping ko dekhne ke liye.")
+        # Show Highlighted Metrics Cards
+        st.markdown("### 📈 Consolidated Performance KPI Dashboard")
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Gross Sales", f"₹{processed_report['Gross Sale Amt'].sum():,.2f}")
+        k2.metric("Net Settled Amount", f"₹{processed_report['Net Settled Amount'].sum():,.2f}")
+        k3.metric("Logistics Return Pcs", f"{int(processed_report['Total Logistics Return Qty'].sum())} Pcs")
+        k4.metric("Customer Return Pcs", f"{int(processed_report['Total Customer Return Qty'].sum())} Pcs")
+        
+        st.write("---")
+        
+        # Injecting Bottom TOTAL Row dynamically
+        total_row = pd.DataFrame([{
+            'Order Item ID': 'TOTAL', 'Seller SKU': '',
+            'Total Sale Qty': processed_report['Total Sale Qty'].sum(),
+            'Total Logistics Return Qty': processed_report['Total Logistics Return Qty'].sum(),
+            'Total Customer Return Qty': processed_report['Total Customer Return Qty'].sum(),
+            'Gross Sale Amt': processed_report['Gross Sale Amt'].sum(),
+            'Total Refund': processed_report['Total Refund'].sum(),
+            'Marketplace Fees': processed_report['Marketplace Fees'].sum(),
+            'Taxes': processed_report['Taxes'].sum(),
+            'Total ADD Fees': processed_report['Total ADD Fees'].sum(),
+            'Net Settled Amount': processed_report['Net Settled Amount'].sum()
+        }])
+        
+        display_df = pd.concat([processed_report, total_row], ignore_index=True)
+        
+        # Pure Uniform #46bdc6 Color Style formatting logic 
+        def style_full_table(df):
+            return df.style.apply(lambda x: pd.DataFrame([['background-color: #46bdc6; color: black; font-weight: bold;'] * len(df.columns)], index=df.index, columns=df.columns), axis=None)
+        
+        fmt = {
+            'Gross Sale Amt': '₹{:,.2f}', 'Total Refund': '₹{:,.2f}', 'Marketplace Fees': '₹{:,.2f}',
+            'Taxes': '₹{:,.2f}', 'Total ADD Fees': '₹{:,.2f}', 'Net Settled Amount': '₹{:,.2f}',
+            'Total Sale Qty': '{:,.0f}', 'Total Logistics Return Qty': '{:,.0f}', 'Total Customer Return Qty': '{:,.0f}'
+        }
+        
+        styled_final = style_full_table(display_df).format(fmt)
+        
+        # Display live grid layout
+        st.subheader("📋 SKU & Order Item ID Wise Consolidated Sheet Ledger")
+        st.dataframe(styled_final, use_container_width=True, hide_index=True)
+        
+        # Single click download option
+        st.download_button(
+            label="📥 Download Reconciled SKU Sheet",
+            data=processed_report.to_csv(index=False).encode('utf-8'),
+            file_name='Flipkart_SKU_Wise_Clean_Settlement.csv',
+            mime='text/csv'
+        )
             
     except Exception as e:
-        st.error(f"Processing error: {str(e)}")
+        st.error(f"Sheet load karne ya processing mein error aaya: {str(e)}")
 else:
-    st.info("Kripya side panel se apni Flipkart ki 'Orders' sheet upload karein taaki data calculate kiya ja sake.")
+    st
