@@ -45,7 +45,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# --- Direct Supabase Database Connection ---
+# --- Direct Supabase Connection ---
 @st.cache_resource
 def init_supabase() -> Client:
     url = "https://tpbbngotolgthytgjarp.supabase.co"
@@ -93,19 +93,19 @@ def process_flipkart_raw(df, brand_name):
     df.columns = [str(c).replace('\n', ' ').strip() for c in df.columns]
     col_mapping = {c.lower(): c for c in df.columns}
     
-    qty_col = next((col_mapping[k] for k in col_mapping if 'quantity' in k), None)
-    sale_col = next((col_mapping[k] for k in col_mapping if 'sale amount' in k), None)
+    qty_col = next((col_mapping[k] for k in col_mapping if 'quantity' in k or 'qty' in k), None)
+    sale_col = next((col_mapping[k] for k in col_mapping if 'sale amount' in k or 'sale_amt' in k), None)
     refund_col = next((col_mapping[k] for k in col_mapping if 'refund' in k), None)
-    fee_col = next((col_mapping[k] for k in col_mapping if 'marketplace fee' in k), None)
-    add_col = next((col_mapping[k] for k in col_mapping if 'offer adjustment' in k or 'settlement value add' in k), None)
+    fee_col = next((col_mapping[k] for k in col_mapping if 'marketplace fee' in k or 'fee' in k), None)
+    add_col = next((col_mapping[k] for k in col_mapping if 'offer adjustment' in k or 'settlement value add' in k or 'add' in k), None)
     settle_col = next((col_mapping[k] for k in col_mapping if 'bank settlement' in k or 'settled' in k), None)
     
-    sku_col = next((col_mapping[k] for k in col_mapping if 'seller sku' in k or 'sku' in k), None)
-    return_type_col = next((col_mapping[k] for k in col_mapping if 'return type' in k or 'return_type' in k), None)
+    sku_col = next((col_mapping[k] for k in col_mapping if 'seller sku' in k or 'sku' in k or 'design' in k), None)
+    return_type_col = next((col_mapping[k] for k in col_mapping if 'return type' in k or 'return_type' in k or 'return' in k), None)
     date_col = next((col_mapping[k] for k in col_mapping if 'payment date' in k or 'date' in k), None)
 
     if not qty_col or not sku_col:
-        st.error("❌ 'Quantity' ya 'Seller SKU' column sheet mein nahi mila! Kripya sahi sheet tab select karein.")
+        st.error("❌ 'Quantity/Qty' ya 'Seller SKU/Design' column sheet mein nahi mila! Kripya sahi sheet select karein.")
         st.stop()
 
     # Create dynamic Month column
@@ -182,11 +182,10 @@ if uploaded_file is not None:
                 chunk_size = 200
                 for i in range(0, len(db_records), chunk_size):
                     row_data = db_records[i:i+chunk_size]
-                    # Direct insert check without popping columns
                     try:
                         supabase.table("design_wise_summary").insert(row_data).execute()
                     except Exception as ins_err:
-                        # Fallback try
+                        # Fallback try if database table structure schema mismatch occurs
                         supabase.table("design_wise_summary").insert(row_data).execute()
                 
                 st.cache_data.clear()
@@ -199,6 +198,7 @@ if uploaded_file is not None:
 st.markdown("## 🎯 Realtime Global Filters (Brand / Month / Marketplace)")
 
 if not df_db_raw.empty:
+    # Standardize incoming database columns to lowercase
     df_db_raw.columns = [c.lower() for c in df_db_raw.columns]
     df_db_raw['brand'] = df_db_raw['brand'].astype(str).str.upper().str.strip()
     
@@ -221,22 +221,22 @@ if not df_db_raw.empty:
     if selected_mp != "All":
         df_final = df_final[df_final['marketplace'] == selected_mp]
         
-    # --- DYNAMIC COLUMN ALIGNMENT ENGINE ---
-    # Database keys may vary, we map potential aliases to avoid 0.0 fallback
+    # --- DYNAMIC COLUMN ALIGNMENT ENGINE (FLEXIBLE ALIAS MATCHING) ---
+    # Database column keys can be varied. We dynamically scan all variations.
     column_mappings = {
-        'sale_qty': ['sale_qty', 'is_sale', 'sale_quantity', 'qty'],
-        'logistics_return_qty': ['logistics_return_qty', 'logistics_return_pcs', 'logistics_return'],
-        'customer_return_qty': ['customer_return_qty', 'customer_return_pcs', 'customer_return'],
-        'sale_amount': ['sale_amount', 'gross_sale_amt', 'sales_amount'],
-        'return_amount': ['return_amount', 'total_refund', 'refund_amount'],
-        'marketplace_fee': ['marketplace_fee', 'marketplace_fees'],
-        'add_fees': ['add_fees', 'total_add_fees'],
-        'settlement_amount': ['settlement_amount', 'net_settled_amount', 'settled_amount']
+        'sale_qty': ['sale_qty', 'is_sale', 'sale_quantity', 'qty', 'sales_qty', 'total_sale_pcs'],
+        'logistics_return_qty': ['logistics_return_qty', 'logistics_return_pcs', 'logistics_return', 'logistics_qty'],
+        'customer_return_qty': ['customer_return_qty', 'customer_return_pcs', 'customer_return', 'customer_qty'],
+        'sale_amount': ['sale_amount', 'gross_sale_amt', 'sales_amount', 'sale_amt'],
+        'return_amount': ['return_amount', 'total_refund', 'refund_amount', 'return_amt'],
+        'marketplace_fee': ['marketplace_fee', 'marketplace_fees', 'fee'],
+        'add_fees': ['add_fees', 'total_add_fees', 'add_fee'],
+        'settlement_amount': ['settlement_amount', 'net_settled_amount', 'settled_amount', 'settle_amount']
     }
     
+    # Map matched columns or fallback to default 0.0 safely
     for standard_col, aliases in column_mappings.items():
-        # Check if the exact standard name or any alias exists in the DB raw structure
-        matched_col = next((col for col in df_final.columns if col in aliases), None)
+        matched_col = next((col for col in df_final.columns if col in aliases or col.replace('_', '') in [a.replace('_', '') for a in aliases]), None)
         if matched_col:
             df_final[standard_col] = pd.to_numeric(df_final[matched_col], errors='coerce').fillna(0.0)
         else:
