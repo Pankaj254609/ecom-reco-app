@@ -139,16 +139,17 @@ if action == "Upload Data":
                 
             return_status_col = st.selectbox("Select Return Type Column (Optional):", ["None"] + all_file_cols, index=get_default_idx(["None"] + all_file_cols, ["return type", "status"]))
 
-            # --- 2. READ ADS SHEET ---
-            df_ads_summary = pd.DataFrame(columns=['design', 'Ads_Cost'])
+            # --- 2. READ ADS SHEET (SMART BLANK/NO-SKU MODE) ---
+            total_ads_cost_pool = 0.0
             ads_sheet_name = next((s for s in xls_file.sheet_names if 'ad' in s.lower()), None)
             
             if ads_sheet_name:
                 df_ads_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name)
                 
+                # Header fix for Ads Sheet
                 for i in range(min(10, df_ads_raw.shape[0])):
                     row_vals_ads = [str(x).lower().strip() for x in df_ads_raw.iloc[i].values]
-                    if 'settlement' in row_vals_ads or 'sku' in row_vals_ads or 'ad' in row_vals_ads:
+                    if 'settlement' in row_vals_ads or 'neft' in row_vals_ads or 'ad' in row_vals_ads:
                         df_ads_raw.columns = df_ads_raw.iloc[i]
                         df_ads_raw = df_ads_raw[i+1:].reset_index(drop=True)
                         break
@@ -156,24 +157,15 @@ if action == "Upload Data":
                 df_ads_raw.columns = [str(c).strip() for c in df_ads_raw.columns]
                 all_ads_cols = list(df_ads_raw.columns)
                 
-                st.info(f"📈 **Please match the Columns for Ads Sheet ('{ads_sheet_name}'):**")
-                col_ads1, col_ads2 = st.columns(2)
-                with col_ads1:
-                    ads_sku_col = st.selectbox("Select SKU Column (Ads Sheet):", all_ads_cols, index=get_default_idx(all_ads_cols, ["seller sku", "sku", "design"]))
-                with col_ads2:
-                    ads_val_col = st.selectbox("Select Ads Cost / Settlement Value Column:", all_ads_cols, index=get_default_idx(all_ads_cols, ["settlement value", "ad cost", "cost", "amount", "value"]))
+                st.info(f"📈 **Please match the Cost Column for Ads Sheet ('{ads_sheet_name}'):**")
+                # Look for Settlement Value column like in the screenshot
+                ads_val_col = st.selectbox("Select Ads Cost / Settlement Value Column:", all_ads_cols, index=get_default_idx(all_ads_cols, ["settlement value", "ad cost", "cost", "amount", "value"]))
                 
-                if ads_sku_col and ads_val_col:
-                    # Robust cleanup for Ads SKU mapping
-                    df_ads_raw[ads_sku_col] = df_ads_raw[ads_sku_col].astype(str).str.strip().str.upper()
-                    
-                    # Convert cost to absolute float numbers (handling negative fees safely)
+                if ads_val_col:
                     s_ads = df_ads_raw[ads_val_col].astype(str).str.replace('₹', '').str.replace(',', '').str.replace(' ', '').str.strip()
-                    df_ads_raw['Ads_Cost_Clean'] = pd.to_numeric(s_ads, errors='coerce').fillna(0).abs()
-                    
-                    df_ads_summary = df_ads_raw.groupby(ads_sku_col)['Ads_Cost_Clean'].sum().reset_index()
-                    df_ads_summary.columns = ['design', 'Ads_Cost']
-                    st.success(f"✅ Target Ads parsed. Rows count: {len(df_ads_summary)}")
+                    # Flipkart reports negative settlement value for deductions (ads cost), converting to absolute positive cost pool
+                    total_ads_cost_pool = pd.to_numeric(s_ads, errors='coerce').fillna(0).abs().sum()
+                    st.success(f"✅ Parsed Total Ads Cost from sheet: **₹ {total_ads_cost_pool:,.2f}**")
             else:
                 st.warning("⚠️ No 'Ads' sheet detected.")
 
@@ -191,7 +183,6 @@ if action == "Upload Data":
             upload_month = st.text_input("Confirm Month Value:", value=detected_month_val).strip().upper()
 
             if st.button("🚀 Process & Upload Data Now"):
-                # Clean primary Order Sheet SKU format
                 df_raw[design_col] = df_raw[design_col].astype(str).str.strip().str.upper()
                 df_raw['Clean_Qty'] = pd.to_numeric(df_raw[qty_col], errors='coerce').fillna(0).astype(int)
                 
@@ -226,9 +217,10 @@ if action == "Upload Data":
                 
                 summary_df.columns = ['design', 'Gross_Sale', 'Refund', 'Fees', 'Net_Settled', 'Sales_Pcs', 'Log_Pcs', 'Cust_Pcs']
 
-                # --- ADVANCED FUZZY MERGE ---
-                if not df_ads_summary.empty:
-                    summary_df = pd.merge(summary_df, df_ads_summary, on='design', how='left').fillna(0)
+                # Distribute global Ads Cost Pool among available unique designs equally
+                unique_designs_count = len(summary_df)
+                if unique_designs_count > 0 and total_ads_cost_pool > 0:
+                    summary_df['Ads_Cost'] = total_ads_cost_pool / unique_designs_count
                 else:
                     summary_df['Ads_Cost'] = 0.0
 
@@ -267,7 +259,7 @@ if action == "Upload Data":
                         pass
                     
                     supabase.table("design_wise_summary").insert(db_payload).execute()
-                    st.success(f"🎉 Success! Uploaded {len(db_payload)} records with exact Ads calculations mapping!")
+                    st.success(f"🎉 Success! Uploaded {len(db_payload)} rows. Total Ads Fee Pool of ₹ {total_ads_cost_pool:,.2f} has been accounted for!")
                     st.balloons()
                 else:
                     st.error("Processing generated empty data framework.")
