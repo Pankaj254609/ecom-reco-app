@@ -87,8 +87,16 @@ selected_brand = st.sidebar.selectbox("Filter Brand:", ["ALL"] + available_brand
 selected_mp = st.sidebar.selectbox("Filter Marketplace:", ["ALL"] + available_marketplaces, index=0)
 selected_month = st.sidebar.selectbox("Filter Month:", ["ALL"] + available_months, index=0) if (has_month_year or has_month) else "ALL"
 
+# Helper for robust case-insensitive default index lookup
+def get_default_idx(lst, keywords):
+    for kw in keywords:
+        for idx, col in enumerate(lst):
+            if kw.lower() in str(col).lower():
+                return idx
+    return 0
+
 # ==========================================
-# ACTION: UPLOAD DATA (WITH MANUAL DROPDOWN MAPPER)
+# ACTION: UPLOAD DATA
 # ==========================================
 if action == "Upload Data":
     st.header("📤 Upload & Process Financial Report")
@@ -103,67 +111,72 @@ if action == "Upload Data":
             file_bytes = uploaded_file.read()
             xls_file = pd.ExcelFile(io.BytesIO(file_bytes))
             
+            # --- 1. PROCESS ORDERS SHEET ---
             orders_sheet = 'Orders' if 'Orders' in xls_file.sheet_names else xls_file.sheet_names[0]
             df_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=orders_sheet)
             
-            # Smart Header Resolver (Skip blank/intro rows automatically)
+            # Smart Header Resolver for Orders Sheet
             target_keywords = ['sku', 'seller sku', 'sale amount', 'my share', 'refund']
-            found_header = False
             for i in range(min(15, df_raw.shape[0])):
                 row_str_vals = [str(x).lower().strip() for x in df_raw.iloc[i].values]
                 if any(k in row_str_vals for k in target_keywords):
                     df_raw.columns = df_raw.iloc[i]
                     df_raw = df_raw[i+1:].reset_index(drop=True)
-                    found_header = True
                     break
             
-            # Strip spaces from column names
             df_raw.columns = [str(c).strip() for c in df_raw.columns]
             all_file_cols = list(df_raw.columns)
             
-            st.warning("🎯 **Please match the columns from your Excel file below:**")
-            
-            # Helper selector mapping
-            def get_default_idx(lst, keywords):
-                for kw in keywords:
-                    for idx, col in enumerate(lst):
-                        if kw.lower() in str(col).lower():
-                            return idx
-                return 0
-
-            # Dynamic Select Boxes for User
+            st.warning("🎯 **Please match the Columns for 'Orders' Sheet:**")
             col_sel1, col_sel2 = st.columns(2)
             with col_sel1:
-                design_col = st.selectbox("1. Select SKU / Design Column:", all_file_cols, index=get_default_idx(all_file_cols, ["seller sku", "sku", "design"]))
-                gross_sale_col = st.selectbox("2. Select Gross Sales Column:", all_file_cols, index=get_default_idx(all_file_cols, ["sale amount total", "gross sales", "sale amount"]))
-                refund_col = st.selectbox("3. Select Total Refund Column:", all_file_cols, index=get_default_idx(all_file_cols, ["refund"]))
+                design_col = st.selectbox("Select SKU / Design Column (Orders):", all_file_cols, index=get_default_idx(all_file_cols, ["seller sku", "sku", "design"]))
+                gross_sale_col = st.selectbox("Select Gross Sales Column:", all_file_cols, index=get_default_idx(all_file_cols, ["sale amount total", "gross sales", "sale amount"]))
+                refund_col = st.selectbox("Select Total Refund Column:", all_file_cols, index=get_default_idx(all_file_cols, ["refund"]))
             
             with col_sel2:
-                mp_fees_col = st.selectbox("4. Select Marketplace Fees Column:", all_file_cols, index=get_default_idx(all_file_cols, ["marketplace fee", "fees", "fee"]))
-                net_settled_col = st.selectbox("5. Select Net Settled Column:", all_file_cols, index=get_default_idx(all_file_cols, ["my share", "net settled", "settlement"]))
-                qty_col = st.selectbox("6. Select Quantity Column:", all_file_cols, index=get_default_idx(all_file_cols, ["quantity", "qty"]))
+                mp_fees_col = st.selectbox("Select Marketplace Fees Column:", all_file_cols, index=get_default_idx(all_file_cols, ["marketplace fee", "fees", "fee"]))
+                net_settled_col = st.selectbox("Select Net Settled Column:", all_file_cols, index=get_default_idx(all_file_cols, ["my share", "net settled", "settlement"]))
+                qty_col = st.selectbox("Select Quantity Column:", all_file_cols, index=get_default_idx(all_file_cols, ["quantity", "qty"]))
                 
-            return_status_col = st.selectbox("7. Select Return Type Column (Optional):", ["None"] + all_file_cols, index=get_default_idx(["None"] + all_file_cols, ["return type", "status"]))
+            return_status_col = st.selectbox("Select Return Type Column (Optional):", ["None"] + all_file_cols, index=get_default_idx(["None"] + all_file_cols, ["return type", "status"]))
 
-            # 2. READ ADS SHEET
+            # --- 2. PROCESS ADS SHEET ---
             df_ads_summary = pd.DataFrame(columns=['design', 'Ads_Cost'])
-            if 'Ads' in xls_file.sheet_names:
-                df_ads_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name='Ads')
+            ads_sheet_name = next((s for s in xls_file.sheet_names if 'ad' in s.lower()), None)
+            
+            if ads_sheet_name:
+                df_ads_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name)
+                
+                # Smart Header Resolver for Ads Sheet
                 for i in range(min(10, df_ads_raw.shape[0])):
-                    if 'Settlement Value (Rs.)' in df_ads_raw.iloc[i].values or 'Seller SKU' in df_ads_raw.iloc[i].values:
+                    row_vals_ads = [str(x).lower().strip() for x in df_ads_raw.iloc[i].values]
+                    if 'settlement' in row_vals_ads or 'sku' in row_vals_ads or 'ad' in row_vals_ads:
                         df_ads_raw.columns = df_ads_raw.iloc[i]
                         df_ads_raw = df_ads_raw[i+1:].reset_index(drop=True)
                         break
+                
                 df_ads_raw.columns = [str(c).strip() for c in df_ads_raw.columns]
+                all_ads_cols = list(df_ads_raw.columns)
                 
-                ads_sku = next((c for c in df_ads_raw.columns if 'sku' in c.lower()), None)
-                ads_val = next((c for c in df_ads_raw.columns if 'settlement' in c.lower() or 'ad' in c.lower()), None)
+                st.info(f"📈 **Please match the Columns for Ads Sheet ('{ads_sheet_name}'):**")
+                col_ads1, col_ads2 = st.columns(2)
+                with col_ads1:
+                    ads_sku_col = st.selectbox("Select SKU Column (Ads Sheet):", all_ads_cols, index=get_default_idx(all_ads_cols, ["seller sku", "sku", "design"]))
+                with col_ads2:
+                    ads_val_col = st.selectbox("Select Ads Cost / Settlement Value Column:", all_ads_cols, index=get_default_idx(all_ads_cols, ["settlement value", "ad cost", "cost", "amount"]))
                 
-                if ads_sku and ads_val:
-                    df_ads_raw[ads_sku] = df_ads_raw[ads_sku].astype(str).str.strip()
-                    df_ads_raw['Ads_Cost_Clean'] = pd.to_numeric(df_ads_raw[ads_val], errors='coerce').fillna(0)
-                    df_ads_summary = df_ads_raw.groupby(ads_sku)['Ads_Cost_Clean'].sum().reset_index()
+                # Pre-process Ads mapping values safely
+                if ads_sku_col and ads_val_col:
+                    df_ads_raw[ads_sku_col] = df_ads_raw[ads_sku_col].astype(str).str.strip()
+                    s_ads = df_ads_raw[ads_val_col].astype(str).str.replace('₹', '').str.replace(',', '').str.replace(' ', '').str.strip()
+                    df_ads_raw['Ads_Cost_Clean'] = pd.to_numeric(s_ads, errors='coerce').fillna(0)
+                    
+                    df_ads_summary = df_ads_raw.groupby(ads_sku_col)['Ads_Cost_Clean'].sum().reset_index()
                     df_ads_summary.columns = ['design', 'Ads_Cost']
+                    st.success(f"✅ Ads Data mapped completely from sheet '{ads_sheet_name}'")
+            else:
+                st.warning("⚠️ No 'Ads' sheet detected in the file. Total Add Fees will be processed as 0.00")
 
             # Date / Month Selector
             date_col = next((c for c in all_file_cols if 'date' in c.lower() or 'time' in c.lower()), None)
@@ -215,6 +228,7 @@ if action == "Upload Data":
                 
                 summary_df.columns = ['design', 'Gross_Sale', 'Refund', 'Fees', 'Net_Settled', 'Sales_Pcs', 'Log_Pcs', 'Cust_Pcs']
 
+                # Merge processed ads summary
                 if not df_ads_summary.empty:
                     summary_df = pd.merge(summary_df, df_ads_summary, on='design', how='left').fillna(0)
                 else:
@@ -255,7 +269,7 @@ if action == "Upload Data":
                         pass
                     
                     supabase.table("design_wise_summary").insert(db_payload).execute()
-                    st.success(f"🎉 Success! Uploaded {len(db_payload)} row metrics database records!")
+                    st.success(f"🎉 Success! Uploaded {len(db_payload)} row metrics database records with Ads Data!")
                     st.balloons()
                 else:
                     st.error("No valid calculations produced. Check layout values format.")
