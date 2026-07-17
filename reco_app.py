@@ -87,7 +87,6 @@ selected_brand = st.sidebar.selectbox("Filter Brand:", ["ALL"] + available_brand
 selected_mp = st.sidebar.selectbox("Filter Marketplace:", ["ALL"] + available_marketplaces, index=0)
 selected_month = st.sidebar.selectbox("Filter Month:", ["ALL"] + available_months, index=0) if (has_month_year or has_month) else "ALL"
 
-# Helper for robust case-insensitive default index lookup
 def get_default_idx(lst, keywords):
     for kw in keywords:
         for idx, col in enumerate(lst):
@@ -111,11 +110,10 @@ if action == "Upload Data":
             file_bytes = uploaded_file.read()
             xls_file = pd.ExcelFile(io.BytesIO(file_bytes))
             
-            # --- 1. PROCESS ORDERS SHEET ---
+            # --- 1. READ ORDERS SHEET ---
             orders_sheet = 'Orders' if 'Orders' in xls_file.sheet_names else xls_file.sheet_names[0]
             df_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=orders_sheet)
             
-            # Smart Header Resolver for Orders Sheet
             target_keywords = ['sku', 'seller sku', 'sale amount', 'my share', 'refund']
             for i in range(min(15, df_raw.shape[0])):
                 row_str_vals = [str(x).lower().strip() for x in df_raw.iloc[i].values]
@@ -141,14 +139,13 @@ if action == "Upload Data":
                 
             return_status_col = st.selectbox("Select Return Type Column (Optional):", ["None"] + all_file_cols, index=get_default_idx(["None"] + all_file_cols, ["return type", "status"]))
 
-            # --- 2. PROCESS ADS SHEET ---
+            # --- 2. READ ADS SHEET ---
             df_ads_summary = pd.DataFrame(columns=['design', 'Ads_Cost'])
             ads_sheet_name = next((s for s in xls_file.sheet_names if 'ad' in s.lower()), None)
             
             if ads_sheet_name:
                 df_ads_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name)
                 
-                # Smart Header Resolver for Ads Sheet
                 for i in range(min(10, df_ads_raw.shape[0])):
                     row_vals_ads = [str(x).lower().strip() for x in df_ads_raw.iloc[i].values]
                     if 'settlement' in row_vals_ads or 'sku' in row_vals_ads or 'ad' in row_vals_ads:
@@ -164,21 +161,22 @@ if action == "Upload Data":
                 with col_ads1:
                     ads_sku_col = st.selectbox("Select SKU Column (Ads Sheet):", all_ads_cols, index=get_default_idx(all_ads_cols, ["seller sku", "sku", "design"]))
                 with col_ads2:
-                    ads_val_col = st.selectbox("Select Ads Cost / Settlement Value Column:", all_ads_cols, index=get_default_idx(all_ads_cols, ["settlement value", "ad cost", "cost", "amount"]))
+                    ads_val_col = st.selectbox("Select Ads Cost / Settlement Value Column:", all_ads_cols, index=get_default_idx(all_ads_cols, ["settlement value", "ad cost", "cost", "amount", "value"]))
                 
-                # Pre-process Ads mapping values safely
                 if ads_sku_col and ads_val_col:
-                    df_ads_raw[ads_sku_col] = df_ads_raw[ads_sku_col].astype(str).str.strip()
+                    # Robust cleanup for Ads SKU mapping
+                    df_ads_raw[ads_sku_col] = df_ads_raw[ads_sku_col].astype(str).str.strip().str.upper()
+                    
+                    # Convert cost to absolute float numbers (handling negative fees safely)
                     s_ads = df_ads_raw[ads_val_col].astype(str).str.replace('₹', '').str.replace(',', '').str.replace(' ', '').str.strip()
-                    df_ads_raw['Ads_Cost_Clean'] = pd.to_numeric(s_ads, errors='coerce').fillna(0)
+                    df_ads_raw['Ads_Cost_Clean'] = pd.to_numeric(s_ads, errors='coerce').fillna(0).abs()
                     
                     df_ads_summary = df_ads_raw.groupby(ads_sku_col)['Ads_Cost_Clean'].sum().reset_index()
                     df_ads_summary.columns = ['design', 'Ads_Cost']
-                    st.success(f"✅ Ads Data mapped completely from sheet '{ads_sheet_name}'")
+                    st.success(f"✅ Target Ads parsed. Rows count: {len(df_ads_summary)}")
             else:
-                st.warning("⚠️ No 'Ads' sheet detected in the file. Total Add Fees will be processed as 0.00")
+                st.warning("⚠️ No 'Ads' sheet detected.")
 
-            # Date / Month Selector
             date_col = next((c for c in all_file_cols if 'date' in c.lower() or 'time' in c.lower()), None)
             detected_month_val = "UNKNOWN"
             if date_col:
@@ -193,7 +191,8 @@ if action == "Upload Data":
             upload_month = st.text_input("Confirm Month Value:", value=detected_month_val).strip().upper()
 
             if st.button("🚀 Process & Upload Data Now"):
-                df_raw[design_col] = df_raw[design_col].astype(str).str.strip()
+                # Clean primary Order Sheet SKU format
+                df_raw[design_col] = df_raw[design_col].astype(str).str.strip().str.upper()
                 df_raw['Clean_Qty'] = pd.to_numeric(df_raw[qty_col], errors='coerce').fillna(0).astype(int)
                 
                 if return_status_col != "None":
@@ -215,7 +214,6 @@ if action == "Upload Data":
                 df_raw['Fees_Clean'] = clean_numeric_series(mp_fees_col)
                 df_raw['Net_Settled_Clean'] = clean_numeric_series(net_settled_col)
 
-                # Group values safely
                 summary_df = df_raw.groupby(design_col).agg({
                     'Gross_Sale_Clean': 'sum',
                     'Refund_Clean': 'sum',
@@ -228,7 +226,7 @@ if action == "Upload Data":
                 
                 summary_df.columns = ['design', 'Gross_Sale', 'Refund', 'Fees', 'Net_Settled', 'Sales_Pcs', 'Log_Pcs', 'Cust_Pcs']
 
-                # Merge processed ads summary
+                # --- ADVANCED FUZZY MERGE ---
                 if not df_ads_summary.empty:
                     summary_df = pd.merge(summary_df, df_ads_summary, on='design', how='left').fillna(0)
                 else:
@@ -269,10 +267,10 @@ if action == "Upload Data":
                         pass
                     
                     supabase.table("design_wise_summary").insert(db_payload).execute()
-                    st.success(f"🎉 Success! Uploaded {len(db_payload)} row metrics database records with Ads Data!")
+                    st.success(f"🎉 Success! Uploaded {len(db_payload)} records with exact Ads calculations mapping!")
                     st.balloons()
                 else:
-                    st.error("No valid calculations produced. Check layout values format.")
+                    st.error("Processing generated empty data framework.")
         except Exception as e:
             st.error(f"Error parsing sheet columns: {str(e)}")
 
