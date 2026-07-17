@@ -100,7 +100,13 @@ if action == "Upload Data":
             st.success("File uploaded successfully! Processing columns...")
             
             # --- Column Mapping Definitions ---
-            design_col = find_and_map_column(df_raw, ["fsn", "sku", "design", "style", "style code", "style_code", "product_id"])
+            # Expanded design_col mapping list to prevent "Could not detect Style/SKU" error
+            design_col = find_and_map_column(df_raw, [
+                "fsn", "sku", "design", "style", "style code", "style_code", "product_id", 
+                "seller sku", "seller_sku", "sku id", "sku_id", "style no", "style_no", 
+                "product id", "channel sku", "channel_sku", "seller sku code", "item code", "item_code"
+            ])
+            
             gross_sale_col = find_and_map_column(df_raw, ["gross sale amt", "sale_amount", "sales", "order amount", "gross sales"])
             refund_col = find_and_map_column(df_raw, ["total refund", "refund", "refund_amount", "customer return value"])
             mp_fees_col = find_and_map_column(df_raw, ["marketplace fees", "fees", "commission", "marketplace_fee"])
@@ -179,7 +185,6 @@ if action == "Upload Data":
                         "marketplace_fees": float(row['Fees_Clean']),
                         "total_add_fees": float(row['Add_Fees_Clean']),
                         "net_settled_amount": float(row['Net_Settled_Clean']),
-                        # Storing multiple variants to ensure successful queries later
                         "total_sale_pcs": int(row['Is_Sale']),
                         "sale_qty": int(row['Is_Sale']),
                         "logistics_return_pcs": int(row['Logistics_Return']),
