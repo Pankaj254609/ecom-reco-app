@@ -47,53 +47,55 @@ st.write("Analyze and manage your e-commerce financial performance seamlessly.")
 # --- SIDEBAR CONTROL PANEL ---
 st.sidebar.header("⚙️ Control Panel")
 
-# 1. Action Selector
 action = st.sidebar.radio("Choose Action:", ["View Dashboard", "Upload Data"], index=0)
 
-# 2. Get DB Schema Dynamically to Prevent Key/Column Errors
+# 1. Fetch Real Database Columns list Dynamically
 db_columns = []
 try:
-    # Fetch 1 row to inspect valid DB column names
     inspect_query = supabase.table("design_wise_summary").select("*").limit(1).execute()
     if inspect_query.data:
-        db_columns = list(inspect_query.data[0].keys())
+        db_columns = [col.lower().strip() for col in inspect_query.data[0].keys()]
     else:
-        # Fallback if table is empty, try a system query or use standard columns
-        db_columns = ["id", "brand", "marketplace", "design", "gross_sale_amt", "total_refund", "marketplace_fees", "total_add_fees", "net_settled_amount", "total_sale_pcs", "sale_qty", "logistics_return_pcs", "logistics_return_qty", "customer_return_pcs", "customer_return_qty"]
+        db_columns = ["brand", "marketplace", "design", "gross_sale_amt", "total_refund", "marketplace_fees", "total_add_fees", "net_settled_amount", "total_sale_pcs", "sale_qty", "logistics_return_pcs", "logistics_return_qty", "customer_return_pcs", "customer_return_qty", "month", "month_year"]
 except Exception as e:
-    db_columns = []
+    db_columns = ["brand", "marketplace", "design", "gross_sale_amt", "total_refund", "marketplace_fees", "total_add_fees", "net_settled_amount", "total_sale_pcs", "sale_qty", "logistics_return_pcs", "logistics_return_qty", "customer_return_pcs", "customer_return_qty", "month", "month_year"]
 
-# Check if month_year exists in database schema
+# Check for both variations of month columns in DB
 has_month_year = "month_year" in db_columns
+has_month = "month" in db_columns
 
-# Global Filters
+# Global Filters setup
 available_brands, available_marketplaces, available_months = [], [], []
 try:
     select_fields = "brand, marketplace"
     if has_month_year:
         select_fields += ", month_year"
+    elif has_month:
+        select_fields += ", month"
         
     meta_query = supabase.table("design_wise_summary").select(select_fields).execute()
     if meta_query.data:
         meta_df = pd.DataFrame(meta_query.data)
         available_brands = sorted(meta_df['brand'].unique()) if 'brand' in meta_df.columns else []
         available_marketplaces = sorted(meta_df['marketplace'].unique()) if 'marketplace' in meta_df.columns else []
-        available_months = sorted(meta_df['month_year'].unique()) if 'month_year' in meta_df.columns else []
+        
+        if 'month_year' in meta_df.columns:
+            available_months = sorted(meta_df['month_year'].unique())
+        elif 'month' in meta_df.columns:
+            available_months = sorted(meta_df['month'].unique())
 except Exception as e:
     pass
 
 selected_brand = st.sidebar.selectbox("Filter Brand:", ["ALL"] + available_brands, index=0)
 selected_mp = st.sidebar.selectbox("Filter Marketplace:", ["ALL"] + available_marketplaces, index=0)
 
-# Render Month filter only if DB has this column
-if has_month_year:
-    selected_month = st.sidebar.selectbox("Filter Month-Year:", ["ALL"] + available_months, index=0)
+if has_month_year or has_month:
+    selected_month = st.sidebar.selectbox("Filter Month:", ["ALL"] + available_months, index=0)
 else:
     selected_month = "ALL"
 
-# --- HELPER: UNIFY COLUMN NAMES ---
+# Helper for mapping upload file columns
 def find_and_map_column(df, possible_names, default=None):
-    """Finds a column in df matching any of the possible names (case-insensitive)."""
     df_cols_lower = {col.lower().strip(): col for col in df.columns}
     for name in possible_names:
         name_lower = name.lower().strip()
@@ -107,89 +109,75 @@ def find_and_map_column(df, possible_names, default=None):
 if action == "Upload Data":
     st.header("📤 Upload & Process Financial Report")
     
-    upload_brand = st.text_input("Enter Brand Name:", "RECOAPPPY").strip().upper()
+    upload_brand = st.text_input("Enter Brand Name:", "VIDA LOCA").strip().upper()
     upload_mp = st.selectbox("Select Marketplace:", ["FLIPKART", "AMAZON", "MEESHO", "MYNTRA"])
     
-    upload_month = ""
-    if has_month_year:
-        upload_month = st.text_input("Enter Month-Year (e.g., APR_26):", "APR_26").strip().upper()
-    else:
-        st.warning("⚠️ Database 'month_year' column nahi mila. Monthly filters disable rahenge jab tak aap database update nahi karte (Option 1).")
-    
+    upload_month = st.text_input("Enter Month Value (e.g., JUN_26):", "JUN_26").strip().upper()
+
     uploaded_file = st.file_uploader("Upload Excel/CSV File", type=["xlsx", "csv"])
     
     if uploaded_file is not None:
         try:
             file_bytes = uploaded_file.read()
-            
-            # Auto-detect file headers & skip empty rows
+            # Read 'Orders' sheet explicitly since it's a Flipkart report
             if uploaded_file.name.endswith('.csv'):
                 df_raw = pd.read_csv(io.BytesIO(file_bytes))
-                if df_raw.columns.str.contains('Unnamed').sum() > len(df_raw.columns) / 2:
-                    df_raw = pd.read_csv(io.BytesIO(file_bytes), skiprows=1)
             else:
-                df_raw = pd.read_excel(io.BytesIO(file_bytes))
-                if df_raw.columns.str.contains('Unnamed').sum() > len(df_raw.columns) / 2:
-                    df_raw = pd.read_excel(io.BytesIO(file_bytes), skiprows=1)
+                # Flipkart files have headers on row 0 (which is row 2 in Excel sometimes, let's auto skip metadata)
+                xls_file = pd.ExcelFile(io.BytesIO(file_bytes))
+                target_sheet = 'Orders' if 'Orders' in xls_file.sheet_names else xls_file.sheet_names[0]
+                df_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=target_sheet)
+                
+                # If row 0 contains metadata headers like 'Payment Details', shift to row 1
+                if 'Order ID' not in df_raw.columns and df_raw.shape[0] > 1:
+                    if 'Order ID' in df_raw.iloc[0].values:
+                        df_raw.columns = df_raw.iloc[0]
+                        df_raw = df_raw[1:].reset_index(drop=True)
             
-            st.info("Raw File Loaded successfully!")
+            st.info(f"Loaded sheet columns: {list(df_raw.columns)[:5]}...")
             
-            # --- Auto-detect Design/SKU Column ---
             detected_design_col = find_and_map_column(df_raw, [
-                "fsn", "sku", "design", "style", "style code", "style_code", "product_id", 
-                "seller sku", "seller_sku", "sku id", "sku_id", "style no", "style_no", 
-                "product id", "channel sku", "channel_sku", "seller sku code", "item code", "item_code"
+                "seller sku", "seller_sku", "sku", "design", "fsn", "style", "style code", "style_code"
             ])
             
-            # Interactive dropdown fallback
             if not detected_design_col:
-                st.warning("⚠️ Column auto-detection fails.")
-                design_col = st.selectbox(
-                    "👉 Select SKU / Design / Style Code Column:",
-                    options=list(df_raw.columns)
-                )
+                design_col = st.selectbox("👉 Select SKU / Design / Style Code Column:", options=list(df_raw.columns))
             else:
                 design_col = detected_design_col
                 st.success(f"✅ Automatically mapped SKU/Design to: **'{design_col}'**")
 
-            # Column mappings for metrics
-            gross_sale_col = find_and_map_column(df_raw, ["gross sale amt", "sale_amount", "sales", "order amount", "gross sales"])
-            refund_col = find_and_map_column(df_raw, ["total refund", "refund", "refund_amount", "customer return value"])
-            mp_fees_col = find_and_map_column(df_raw, ["marketplace fees", "fees", "commission", "marketplace_fee"])
-            add_fees_col = find_and_map_column(df_raw, ["total add fees", "add_fees", "other_fees", "ads_fees", "advertisement"])
-            net_settled_col = find_and_map_column(df_raw, ["net settled amount", "net settled", "payout", "net_amount"])
+            gross_sale_col = find_and_map_column(df_raw, ["sale amount (rs.)", "sale amount", "sales", "gross sales"])
+            refund_col = find_and_map_column(df_raw, ["refund (rs.)", "refund", "total refund"])
+            mp_fees_col = find_and_map_column(df_raw, ["marketplace fee (rs.)", "marketplace fees", "fees"])
+            add_fees_col = find_and_map_column(df_raw, ["total add fees", "add_fees", "protection fund (rs.)"])
+            net_settled_col = find_and_map_column(df_raw, ["my share (rs.)", "net settled amount", "payout"])
             
-            qty_col = find_and_map_column(df_raw, ["quantity", "qty", "pieces", "pcs", "ordered qty", "sale qty", "sale_qty", "total_sale_pcs"])
-            return_type_col = find_and_map_column(df_raw, ["return type", "return_type", "order status", "status", "shipment status"])
-            logistics_col = find_and_map_column(df_raw, ["logistics return", "logistics_return_pcs", "rto qty", "rto_quantity"])
-            customer_ret_col = find_and_map_column(df_raw, ["customer return", "customer_return_pcs", "customer return qty"])
+            qty_col = find_and_map_column(df_raw, ["quantity", "qty", "pieces"])
+            return_status_col = find_and_map_column(df_raw, ["item return status", "return type", "status"])
 
             if st.button("Process & Upload Data"):
                 df_raw[design_col] = df_raw[design_col].astype(str).str.strip()
                 
-                # Quantity calculation
                 if qty_col:
                     df_raw['Clean_Qty'] = pd.to_numeric(df_raw[qty_col], errors='coerce').fillna(0).astype(int)
                 else:
                     df_raw['Clean_Qty'] = 1  
                 
-                # Check for returns
-                if return_type_col:
-                    df_raw['Temp_Return'] = df_raw[return_type_col].astype(str).str.strip().fillna('NA')
-                    df_raw['Is_Sale'] = np.where(df_raw['Temp_Return'].str.contains('rto|customer|return|cancelled', case=False, na=False), 0, df_raw['Clean_Qty'])
-                    df_raw['Logistics_Return'] = np.where(df_raw['Temp_Return'].str.contains('rto|dto|courier', case=False, na=False), df_raw['Clean_Qty'], 0)
-                    df_raw['Customer_Return'] = np.where(df_raw['Temp_Return'].str.contains('customer', case=False, na=False), df_raw['Clean_Qty'], 0)
+                # Calculate return breakdown based on Flipkart status fields
+                if return_status_col:
+                    df_raw['Temp_Status'] = df_raw[return_status_col].astype(str).str.strip().lower()
+                    df_raw['Is_Sale'] = np.where(df_raw['Temp_Status'].str.contains('returned|cancelled|rto', na=False), 0, df_raw['Clean_Qty'])
+                    df_raw['Logistics_Return'] = np.where(df_raw['Temp_Status'].str.contains('rto', na=False), df_raw['Clean_Qty'], 0)
+                    df_raw['Customer_Return'] = np.where((df_raw['Temp_Status'].str.contains('returned', na=False)) & (~df_raw['Temp_Status'].str.contains('rto', na=False)), df_raw['Clean_Qty'], 0)
                 else:
-                    df_raw['Logistics_Return'] = pd.to_numeric(df_raw[logistics_col], errors='coerce').fillna(0).astype(int) if logistics_col else 0
-                    df_raw['Customer_Return'] = pd.to_numeric(df_raw[customer_ret_col], errors='coerce').fillna(0).astype(int) if customer_ret_col else 0
-                    df_raw['Is_Sale'] = df_raw['Clean_Qty'] - df_raw['Logistics_Return'] - df_raw['Customer_Return']
-                    df_raw['Is_Sale'] = df_raw['Is_Sale'].clip(lower=0)
+                    df_raw['Is_Sale'] = df_raw['Clean_Qty']
+                    df_raw['Logistics_Return'] = 0
+                    df_raw['Customer_Return'] = 0
 
-                # Map numeric fields
                 def clean_numeric(col_name):
                     if col_name:
                         return pd.to_numeric(df_raw[col_name], errors='coerce').fillna(0)
-                    return pd.Series(0, index=df_raw.index)
+                    return pd.Series(0.0, index=df_raw.index)
 
                 df_raw['Gross_Sale_Clean'] = clean_numeric(gross_sale_col)
                 df_raw['Refund_Clean'] = clean_numeric(refund_col)
@@ -197,7 +185,6 @@ if action == "Upload Data":
                 df_raw['Add_Fees_Clean'] = clean_numeric(add_fees_col)
                 df_raw['Net_Settled_Clean'] = clean_numeric(net_settled_col)
 
-                # Group by Design / SKU
                 summary_df = df_raw.groupby(design_col).agg({
                     'Gross_Sale_Clean': 'sum',
                     'Refund_Clean': 'sum',
@@ -209,10 +196,10 @@ if action == "Upload Data":
                     'Customer_Return': 'sum'
                 }).reset_index()
 
-                # Build Payload dynamic safe-check
+                # Build Payload dynamically validating DB column requirements
                 db_payload = []
                 for _, row in summary_df.iterrows():
-                    item = {
+                    all_fields = {
                         "brand": upload_brand,
                         "marketplace": upload_mp,
                         "design": str(row[design_col]),
@@ -226,31 +213,31 @@ if action == "Upload Data":
                         "logistics_return_pcs": int(row['Logistics_Return']),
                         "logistics_return_qty": int(row['Logistics_Return']),
                         "customer_return_pcs": int(row['Customer_Return']),
-                        "customer_return_qty": int(row['Customer_Return'])
+                        "customer_return_qty": int(row['Customer_Return']),
+                        "month": upload_month,          # Map to 'month' column directly to pass NOT NULL constraint
+                        "month_year": upload_month      # Map to 'month_year' fallback column
                     }
-                    # Insert 'month_year' ONLY if column exists in Supabase DB schema
-                    if has_month_year:
-                        item["month_year"] = upload_month
-                        
-                    db_payload.append(item)
+                    
+                    # Safe Filter: Database payload mein wahi keys daalein jo sach mein DB schema mein hain
+                    safe_item = {k: v for k, v in all_fields.items() if k in db_columns}
+                    db_payload.append(safe_item)
 
                 if db_payload:
-                    # Clear old records
-                    delete_query = supabase.table("design_wise_summary").delete()\
-                        .eq("marketplace", upload_mp)\
-                        .eq("brand", upload_brand)
-                        
-                    if has_month_year:
+                    # Clear old records safely
+                    delete_query = supabase.table("design_wise_summary").delete().eq("marketplace", upload_mp).eq("brand", upload_brand)
+                    if has_month:
+                        delete_query = delete_query.eq("month", upload_month)
+                    elif has_month_year:
                         delete_query = delete_query.eq("month_year", upload_month)
                         
                     delete_query.execute()
                     
-                    # Insert batch
+                    # Batch Insert
                     supabase.table("design_wise_summary").insert(db_payload).execute()
                     st.success(f"Processed and uploaded {len(db_payload)} records successfully!")
-                    st.dataframe(pd.DataFrame(db_payload).head(10))
+                    st.dataframe(pd.DataFrame(db_payload).head(5))
                 else:
-                    st.warning("No rows found to process.")
+                    st.warning("No data rows mapped.")
                     
         except Exception as e:
             st.error(f"Error processing sheet: {str(e)}")
@@ -265,15 +252,17 @@ else:
             query = query.eq("brand", selected_brand)
         if selected_mp != "ALL":
             query = query.eq("marketplace", selected_mp)
-        if has_month_year and selected_month != "ALL":
-            query = query.eq("month_year", selected_month)
+        if selected_month != "ALL":
+            if has_month:
+                query = query.eq("month", selected_month)
+            elif has_month_year:
+                query = query.eq("month_year", selected_month)
             
         response = query.execute()
         
         if response.data:
             df = pd.DataFrame(response.data)
             
-            # Map dynamic DB fields
             def align_column(df, target_col, candidate_names):
                 matched = find_and_map_column(df, candidate_names)
                 if matched:
@@ -303,7 +292,6 @@ else:
             total_cust_qty = int(df['customer_return_pcs'].sum())
             total_dispatch_qty = total_sale_qty + total_log_qty + total_cust_qty
             
-            # KPIs cards
             col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
                 st.markdown(f'<div class="metric-card"><div class="metric-title">Gross Sales</div><div class="metric-value">₹ {total_sales_val:,.2f}</div></div>', unsafe_allow_html=True)
@@ -328,7 +316,6 @@ else:
             with q4:
                 st.metric("Customer Return Pcs", f"{total_cust_qty} pcs")
 
-            # --- VISUALIZATION ---
             st.subheader("📊 Top Designs Performance")
             top_designs = df.groupby('design')['net_settled_amount'].sum().reset_index().sort_values(by='net_settled_amount', ascending=False).head(10)
             fig = px.bar(
@@ -344,7 +331,6 @@ else:
             fig.update_layout(yaxis={'categoryorder': 'total ascending'})
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- DETAILED DATA TABLE ---
             st.subheader("📋 Design-Wise Detailed Breakdown")
             display_df = df.groupby('design').agg({
                 'total_sale_pcs': 'sum',
@@ -363,6 +349,6 @@ else:
             
             st.dataframe(formatted_df, use_container_width=True, height=400)
         else:
-            st.info("No records found in database. Please upload some data using 'Upload Data' tab in sidebar!")
+            st.info("No records found in database. Please upload some data using 'Upload Data' tab!")
     except Exception as e:
         st.error(f"Error: {str(e)}")
