@@ -16,19 +16,19 @@ st.markdown(
         padding: 10px 15px !important;
         border-radius: 8px !important;
         border: 1px solid #3197a0 !important;
-        white-space: normal !important; /* Elipsis (...) hatane ke liye text wrap karega */
+        white-space: normal !important;
         overflow: hidden;
     }
     [data-testid="stMetricValue"] {
         color: black !important;
         font-weight: bold !important;
-        font-size: 1.6rem !important; /* Font size ko thoda chhota kiya taaki bade numbers fit ho jayein */
+        font-size: 1.6rem !important;
         word-break: break-all !important;
     }
     [data-testid="stMetricLabel"] {
         color: black !important;
         font-weight: bold !important;
-        font-size: 0.9rem !important; /* Label ko compact rakha */
+        font-size: 0.9rem !important;
     }
     div[data-testid="stDataFrame"] table th {
         background-color: #46bdc6 !important;
@@ -182,16 +182,11 @@ if uploaded_file is not None:
                 chunk_size = 200
                 for i in range(0, len(db_records), chunk_size):
                     row_data = db_records[i:i+chunk_size]
+                    # Direct insert check without popping columns
                     try:
-                        # Direct clean push to avoid dropping return columns
                         supabase.table("design_wise_summary").insert(row_data).execute()
                     except Exception as ins_err:
-                        st.sidebar.warning("⚠️ Database schema mismatch! Retrying with fallback fields...")
-                        for r in row_data:
-                            if 'customer_return_qty' not in r:
-                                r['customer_return_qty'] = 0
-                            if 'logistics_return_qty' not in r:
-                                r['logistics_return_qty'] = 0
+                        # Fallback try
                         supabase.table("design_wise_summary").insert(row_data).execute()
                 
                 st.cache_data.clear()
@@ -226,19 +221,26 @@ if not df_db_raw.empty:
     if selected_mp != "All":
         df_final = df_final[df_final['marketplace'] == selected_mp]
         
-    # --- SAFE COLUMN CHECK LOGIC ---
-    required_cols = {
-        'sale_qty': 0, 'logistics_return_qty': 0, 'customer_return_qty': 0,
-        'sale_amount': 0.0, 'return_amount': 0.0, 'marketplace_fee': 0.0, 
-        'add_fees': 0.0, 'settlement_amount': 0.0
+    # --- DYNAMIC COLUMN ALIGNMENT ENGINE ---
+    # Database keys may vary, we map potential aliases to avoid 0.0 fallback
+    column_mappings = {
+        'sale_qty': ['sale_qty', 'is_sale', 'sale_quantity', 'qty'],
+        'logistics_return_qty': ['logistics_return_qty', 'logistics_return_pcs', 'logistics_return'],
+        'customer_return_qty': ['customer_return_qty', 'customer_return_pcs', 'customer_return'],
+        'sale_amount': ['sale_amount', 'gross_sale_amt', 'sales_amount'],
+        'return_amount': ['return_amount', 'total_refund', 'refund_amount'],
+        'marketplace_fee': ['marketplace_fee', 'marketplace_fees'],
+        'add_fees': ['add_fees', 'total_add_fees'],
+        'settlement_amount': ['settlement_amount', 'net_settled_amount', 'settled_amount']
     }
-    for rc, default_val in required_cols.items():
-        if rc not in df_final.columns:
-            df_final[rc] = default_val
-            
-    # Standardize types safely
-    for col in required_cols.keys():
-        df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0.0)
+    
+    for standard_col, aliases in column_mappings.items():
+        # Check if the exact standard name or any alias exists in the DB raw structure
+        matched_col = next((col for col in df_final.columns if col in aliases), None)
+        if matched_col:
+            df_final[standard_col] = pd.to_numeric(df_final[matched_col], errors='coerce').fillna(0.0)
+        else:
+            df_final[standard_col] = 0.0
 
     # Aggregate consolidated views
     ui_report = df_final.groupby(['month', 'marketplace', 'brand', 'design']).agg({
@@ -304,7 +306,6 @@ if not df_db_raw.empty:
     display_df = pd.concat([ui_report, total_row], ignore_index=True)
 
     def style_ledger_table(df):
-        # Apply highlighted style ONLY to the last (TOTAL) row
         return df.style.apply(
             lambda x: ['background-color: #46bdc6; color: black; font-weight: bold;' if x.name == len(df)-1 else '' for _ in x], 
             axis=1
