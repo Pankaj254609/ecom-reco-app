@@ -42,11 +42,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📊 Design-Wise Financial Summary Dashboard")
-st.write("Analyze and manage your e-commerce financial performance seamlessly.")
 
 # --- SIDEBAR CONTROL PANEL ---
 st.sidebar.header("⚙️ Control Panel")
-
 action = st.sidebar.radio("Choose Action:", ["View Dashboard", "Upload Data"], index=0)
 
 # Fetch Dynamic Database Columns
@@ -55,9 +53,10 @@ try:
     inspect_query = supabase.table("design_wise_summary").select("*").limit(1).execute()
     if inspect_query.data:
         db_columns = [col.lower().strip() for col in inspect_query.data[0].keys()]
-    else:
-        db_columns = ["brand", "marketplace", "design", "gross_sale_amt", "total_refund", "marketplace_fees", "total_add_fees", "net_settled_amount", "total_sale_pcs", "sale_qty", "logistics_return_pcs", "logistics_return_qty", "customer_return_pcs", "customer_return_qty", "month", "month_year"]
-except Exception as e:
+except Exception:
+    pass
+
+if not db_columns:
     db_columns = ["brand", "marketplace", "design", "gross_sale_amt", "total_refund", "marketplace_fees", "total_add_fees", "net_settled_amount", "total_sale_pcs", "sale_qty", "logistics_return_pcs", "logistics_return_qty", "customer_return_pcs", "customer_return_qty", "month", "month_year"]
 
 has_month_year = "month_year" in db_columns
@@ -77,29 +76,19 @@ try:
         meta_df = pd.DataFrame(meta_query.data)
         available_brands = sorted(meta_df['brand'].unique()) if 'brand' in meta_df.columns else []
         available_marketplaces = sorted(meta_df['marketplace'].unique()) if 'marketplace' in meta_df.columns else []
-        
         if 'month_year' in meta_df.columns:
             available_months = sorted(meta_df['month_year'].unique())
         elif 'month' in meta_df.columns:
             available_months = sorted(meta_df['month'].unique())
-except Exception as e:
+except Exception:
     pass
 
 selected_brand = st.sidebar.selectbox("Filter Brand:", ["ALL"] + available_brands, index=0)
 selected_mp = st.sidebar.selectbox("Filter Marketplace:", ["ALL"] + available_marketplaces, index=0)
 selected_month = st.sidebar.selectbox("Filter Month:", ["ALL"] + available_months, index=0) if (has_month_year or has_month) else "ALL"
 
-# Helper for robust case-insensitive lookup during Upload
-def find_and_map_column(df, possible_names):
-    df_cols_lower = {str(col).lower().replace('\n', ' ').strip(): col for col in df.columns}
-    for name in possible_names:
-        name_lower = str(name).lower().replace('\n', ' ').strip()
-        if name_lower in df_cols_lower:
-            return df_cols_lower[name_lower]
-    return None
-
 # ==========================================
-# ACTION: UPLOAD DATA
+# ACTION: UPLOAD DATA (WITH MANUAL DROPDOWN MAPPER)
 # ==========================================
 if action == "Upload Data":
     st.header("📤 Upload & Process Financial Report")
@@ -114,105 +103,106 @@ if action == "Upload Data":
             file_bytes = uploaded_file.read()
             xls_file = pd.ExcelFile(io.BytesIO(file_bytes))
             
-            # 1. READ ORDERS SHEET
             orders_sheet = 'Orders' if 'Orders' in xls_file.sheet_names else xls_file.sheet_names[0]
             df_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=orders_sheet)
             
-            # --- AUTO DUAL-HEADER CHECK ---
-            # Agar primary check mein 'Seller SKU' nahi mila to custom row header find karenge
-            if 'Seller SKU' not in df_raw.columns and 'Seller SKU' not in [str(x).strip() for x in df_raw.columns]:
-                for i in range(min(12, df_raw.shape[0])):
-                    row_vals = [str(x).strip() for x in df_raw.iloc[i].values]
-                    if 'Seller SKU' in row_vals or 'Sale Amount Total (Rs.)' in row_vals:
-                        df_raw.columns = df_raw.iloc[i]
-                        df_raw = df_raw[i+1:].reset_index(drop=True)
-                        break
+            # Smart Header Resolver (Skip blank/intro rows automatically)
+            target_keywords = ['sku', 'seller sku', 'sale amount', 'my share', 'refund']
+            found_header = False
+            for i in range(min(15, df_raw.shape[0])):
+                row_str_vals = [str(x).lower().strip() for x in df_raw.iloc[i].values]
+                if any(k in row_str_vals for k in target_keywords):
+                    df_raw.columns = df_raw.iloc[i]
+                    df_raw = df_raw[i+1:].reset_index(drop=True)
+                    found_header = True
+                    break
+            
+            # Strip spaces from column names
+            df_raw.columns = [str(c).strip() for c in df_raw.columns]
+            all_file_cols = list(df_raw.columns)
+            
+            st.warning("🎯 **Please match the columns from your Excel file below:**")
+            
+            # Helper selector mapping
+            def get_default_idx(lst, keywords):
+                for kw in keywords:
+                    for idx, col in enumerate(lst):
+                        if kw.lower() in str(col).lower():
+                            return idx
+                return 0
 
-            # --- DEBUG SHOW COLUMNS ---
-            st.info("🔍 **Uploaded File Columns Preview:**")
-            st.write(list(df_raw.columns[:20])) # Pehle 20 columns show karega clear visibility ke liye
+            # Dynamic Select Boxes for User
+            col_sel1, col_sel2 = st.columns(2)
+            with col_sel1:
+                design_col = st.selectbox("1. Select SKU / Design Column:", all_file_cols, index=get_default_idx(all_file_cols, ["seller sku", "sku", "design"]))
+                gross_sale_col = st.selectbox("2. Select Gross Sales Column:", all_file_cols, index=get_default_idx(all_file_cols, ["sale amount total", "gross sales", "sale amount"]))
+                refund_col = st.selectbox("3. Select Total Refund Column:", all_file_cols, index=get_default_idx(all_file_cols, ["refund"]))
+            
+            with col_sel2:
+                mp_fees_col = st.selectbox("4. Select Marketplace Fees Column:", all_file_cols, index=get_default_idx(all_file_cols, ["marketplace fee", "fees", "fee"]))
+                net_settled_col = st.selectbox("5. Select Net Settled Column:", all_file_cols, index=get_default_idx(all_file_cols, ["my share", "net settled", "settlement"]))
+                qty_col = st.selectbox("6. Select Quantity Column:", all_file_cols, index=get_default_idx(all_file_cols, ["quantity", "qty"]))
+                
+            return_status_col = st.selectbox("7. Select Return Type Column (Optional):", ["None"] + all_file_cols, index=get_default_idx(["None"] + all_file_cols, ["return type", "status"]))
 
-            # 2. READ ADS SHEET (IF EXISTS)
+            # 2. READ ADS SHEET
             df_ads_summary = pd.DataFrame(columns=['design', 'Ads_Cost'])
             if 'Ads' in xls_file.sheet_names:
                 df_ads_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name='Ads')
-                if 'Seller SKU' not in df_ads_raw.columns and 'Settlement Value (Rs.)' not in df_ads_raw.columns:
-                    for i in range(min(10, df_ads_raw.shape[0])):
-                        if 'Settlement Value (Rs.)' in df_ads_raw.iloc[i].values or 'Seller SKU' in df_ads_raw.iloc[i].values:
-                            df_ads_raw.columns = df_ads_raw.iloc[i]
-                            df_ads_raw = df_ads_raw[i+1:].reset_index(drop=True)
-                            break
+                for i in range(min(10, df_ads_raw.shape[0])):
+                    if 'Settlement Value (Rs.)' in df_ads_raw.iloc[i].values or 'Seller SKU' in df_ads_raw.iloc[i].values:
+                        df_ads_raw.columns = df_ads_raw.iloc[i]
+                        df_ads_raw = df_ads_raw[i+1:].reset_index(drop=True)
+                        break
+                df_ads_raw.columns = [str(c).strip() for c in df_ads_raw.columns]
                 
-                ads_sku_col = find_and_map_column(df_ads_raw, ["Seller SKU", "sku"])
-                ads_val_col = find_and_map_column(df_ads_raw, ["Settlement Value (Rs.)"])
+                ads_sku = next((c for c in df_ads_raw.columns if 'sku' in c.lower()), None)
+                ads_val = next((c for c in df_ads_raw.columns if 'settlement' in c.lower() or 'ad' in c.lower()), None)
                 
-                if ads_sku_col and ads_val_col:
-                    df_ads_raw[ads_sku_col] = df_ads_raw[ads_sku_col].astype(str).str.strip()
-                    df_ads_raw['Ads_Cost_Clean'] = pd.to_numeric(df_ads_raw[ads_val_col], errors='coerce').fillna(0)
-                    df_ads_summary = df_ads_raw.groupby(ads_sku_col)['Ads_Cost_Clean'].sum().reset_index()
+                if ads_sku and ads_val:
+                    df_ads_raw[ads_sku] = df_ads_raw[ads_sku].astype(str).str.strip()
+                    df_ads_raw['Ads_Cost_Clean'] = pd.to_numeric(df_ads_raw[ads_val], errors='coerce').fillna(0)
+                    df_ads_summary = df_ads_raw.groupby(ads_sku)['Ads_Cost_Clean'].sum().reset_index()
                     df_ads_summary.columns = ['design', 'Ads_Cost']
-                    st.success("✅ 'Ads' sheet loaded successfully!")
-            else:
-                st.warning("⚠️ 'Ads' sheet not found.")
 
-            # --- EXACT MATCHING FOR ORDERS HEADERS ---
-            design_col = find_and_map_column(df_raw, ["Seller SKU", "sku", "design"])
-            date_col = find_and_map_column(df_raw, ["Payment date", "date"])
-            gross_sale_col = find_and_map_column(df_raw, ["Sale Amount Total (Rs.)", "Sale Amount Total", "gross sales"])
-            refund_col = find_and_map_column(df_raw, ["Refund (Rs.)", "Refund", "total refund"])
-            mp_fees_col = find_and_map_column(df_raw, ["Marketplace Fee (Rs.)", "Marketplace Fee", "fees"])
-            net_settled_col = find_and_map_column(df_raw, ["My share (Rs.)", "My share", "net settled"])
-            qty_col = find_and_map_column(df_raw, ["Quantity", "qty"])
-            return_status_col = find_and_map_column(df_raw, ["Return Type", "status"])
-
-            # --- PRINT DETECTED HEADERS STATUS ---
-            st.write(f"**Detected Mapping Status:** SKU: `{design_col}`, Sales: `{gross_sale_col}`, Fees: `{mp_fees_col}`, Net: `{net_settled_col}`")
-
-            if not design_col:
-                st.error("❌ 'Seller SKU' column target missing. Please verify headers layout.")
-                st.stop()
-
-            # --- DYNAMIC MONTH DETECTION ---
+            # Date / Month Selector
+            date_col = next((c for c in all_file_cols if 'date' in c.lower() or 'time' in c.lower()), None)
             detected_month_val = "UNKNOWN"
             if date_col:
                 try:
-                    first_valid_date = df_raw[date_col].dropna().iloc[0]
-                    parsed_date = pd.to_datetime(first_valid_date, errors='coerce')
-                    if not pd.isnull(parsed_date):
-                        detected_month_val = parsed_date.strftime('%b_%y').upper()
+                    first_val = df_raw[date_col].dropna().iloc[0]
+                    parsed_d = pd.to_datetime(first_val, errors='coerce')
+                    if not pd.isnull(parsed_d):
+                        detected_month_val = parsed_d.strftime('%b_%y').upper()
                 except Exception:
                     pass
             
-            upload_month = st.text_input("Confirm/Edit Month Value:", value=detected_month_val).strip().upper()
+            upload_month = st.text_input("Confirm Month Value:", value=detected_month_val).strip().upper()
 
-            if st.button("Process & Upload Data"):
+            if st.button("🚀 Process & Upload Data Now"):
                 df_raw[design_col] = df_raw[design_col].astype(str).str.strip()
-                df_raw['Clean_Qty'] = pd.to_numeric(df_raw[qty_col], errors='coerce').fillna(0).astype(int) if qty_col else 1
+                df_raw['Clean_Qty'] = pd.to_numeric(df_raw[qty_col], errors='coerce').fillna(0).astype(int)
                 
-                if return_status_col:
+                if return_status_col != "None":
                     df_raw['Temp_Status'] = df_raw[return_status_col].astype(str).str.strip().str.lower().fillna('na')
-                    df_raw['Temp_Status'] = df_raw['Temp_Status'].replace(['nan', '', 'none'], 'na')
-                    df_raw['Logistics_Return'] = np.where(df_raw['Temp_Status'].str.contains('logistics return', na=False), df_raw['Clean_Qty'], 0)
+                    df_raw['Logistics_Return'] = np.where(df_raw['Temp_Status'].str.contains('logistics return|forward verification', na=False), df_raw['Clean_Qty'], 0)
                     df_raw['Customer_Return'] = np.where(df_raw['Temp_Status'].str.contains('customer return', na=False), df_raw['Clean_Qty'], 0)
-                    df_raw['Is_Sale'] = np.where(df_raw['Temp_Status'].str.contains('na|delivered', na=False) & (df_raw['Logistics_Return'] == 0) & (df_raw['Customer_Return'] == 0), df_raw['Clean_Qty'], 0)
+                    df_raw['Is_Sale'] = np.where((df_raw['Logistics_Return'] == 0) & (df_raw['Customer_Return'] == 0), df_raw['Clean_Qty'], 0)
                 else:
                     df_raw['Is_Sale'] = df_raw['Clean_Qty']
                     df_raw['Logistics_Return'] = 0
                     df_raw['Customer_Return'] = 0
 
-                def clean_numeric(col_name):
-                    if col_name:
-                        # Stripping symbols if text conversions mistakenly occurred
-                        s = df_raw[col_name].astype(str).str.replace('₹', '').str.replace(',', '').str.strip()
-                        return pd.to_numeric(s, errors='coerce').fillna(0)
-                    return pd.Series(0.0, index=df_raw.index)
+                def clean_numeric_series(col_n):
+                    s = df_raw[col_n].astype(str).str.replace('₹', '').str.replace(',', '').str.replace(' ', '').str.strip()
+                    return pd.to_numeric(s, errors='coerce').fillna(0)
 
-                df_raw['Gross_Sale_Clean'] = clean_numeric(gross_sale_col)
-                df_raw['Refund_Clean'] = clean_numeric(refund_col)
-                df_raw['Fees_Clean'] = clean_numeric(mp_fees_col)
-                df_raw['Net_Settled_Clean'] = clean_numeric(net_settled_col)
+                df_raw['Gross_Sale_Clean'] = clean_numeric_series(gross_sale_col)
+                df_raw['Refund_Clean'] = clean_numeric_series(refund_col)
+                df_raw['Fees_Clean'] = clean_numeric_series(mp_fees_col)
+                df_raw['Net_Settled_Clean'] = clean_numeric_series(net_settled_col)
 
-                # Group by Design
+                # Group values safely
                 summary_df = df_raw.groupby(design_col).agg({
                     'Gross_Sale_Clean': 'sum',
                     'Refund_Clean': 'sum',
@@ -250,28 +240,27 @@ if action == "Upload Data":
                         "month": upload_month,
                         "month_year": upload_month
                     }
-                    
                     safe_item = {k: v for k, v in all_fields.items() if k in db_columns}
                     db_payload.append(safe_item)
 
                 if db_payload:
                     try:
-                        delete_query = supabase.table("design_wise_summary").delete().eq("marketplace", upload_mp).eq("brand", upload_brand)
+                        del_q = supabase.table("design_wise_summary").delete().eq("marketplace", upload_mp).eq("brand", upload_brand)
                         if has_month:
-                            delete_query = delete_query.eq("month", upload_month)
+                            del_q = del_q.eq("month", upload_month)
                         elif has_month_year:
-                            delete_query = delete_query.eq("month_year", upload_month)
-                        delete_query.execute()
+                            del_q = del_q.eq("month_year", upload_month)
+                        del_q.execute()
                     except Exception:
                         pass
                     
                     supabase.table("design_wise_summary").insert(db_payload).execute()
-                    st.success(f"🎉 Successfully uploaded {len(db_payload)} unique design records!")
+                    st.success(f"🎉 Success! Uploaded {len(db_payload)} row metrics database records!")
+                    st.balloons()
                 else:
-                    st.warning("Empty records payload calculated.")
-                    
+                    st.error("No valid calculations produced. Check layout values format.")
         except Exception as e:
-            st.error(f"Error processing sheet structure: {str(e)}")
+            st.error(f"Error parsing sheet columns: {str(e)}")
 
 # ==========================================
 # ACTION: VIEW DASHBOARD
@@ -294,7 +283,6 @@ else:
         if response.data:
             df = pd.DataFrame(response.data)
             
-            # Direct Float formatting values mapping
             df['gross_sale_amt'] = pd.to_numeric(df.get('gross_sale_amt', 0), errors='coerce').fillna(0)
             df['total_refund'] = pd.to_numeric(df.get('total_refund', 0), errors='coerce').fillna(0)
             df['marketplace_fees'] = pd.to_numeric(df.get('marketplace_fees', 0), errors='coerce').fillna(0)
@@ -354,4 +342,4 @@ else:
         else:
             st.info("No records found. Please upload your Excel sheet via the 'Upload Data' tab first!")
     except Exception as e:
-        st.error(f"Error displaying dashboard: {str(e)}")
+        st.error(f"Error rendering metrics dashboard: {str(e)}")
