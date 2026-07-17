@@ -174,12 +174,16 @@ if uploaded_file is not None:
                 for i in range(0, len(db_records), chunk_size):
                     row_data = db_records[i:i+chunk_size]
                     try:
+                        # Direct clean push to avoid dropping return columns
                         supabase.table("design_wise_summary").insert(row_data).execute()
                     except Exception as ins_err:
-                        st.sidebar.warning("⚠️ Database columns mismatch fallback activated.")
+                        st.sidebar.warning("⚠️ Database schema mismatch! Retrying with fallback fields...")
+                        # Map fallback column names safely if your supabase schema uses custom key structures
                         for r in row_data:
-                            r.pop('customer_return_qty', None)
-                            r.pop('logistics_return_qty', None)
+                            if 'customer_return_qty' not in r:
+                                r['customer_return_qty'] = 0
+                            if 'logistics_return_qty' not in r:
+                                r['logistics_return_qty'] = 0
                         supabase.table("design_wise_summary").insert(row_data).execute()
                 
                 st.cache_data.clear()
@@ -249,16 +253,30 @@ if not df_db_raw.empty:
 
     # Global KPI sums
     sales_sum = ui_report['Gross Sale Amt'].sum()
+    refund_sum = ui_report['Total Refund'].sum()
+    fees_sum = ui_report['Marketplace Fees'].sum()
+    add_fees_sum = ui_report['Total ADD Fees'].sum()
     settle_sum = ui_report['Net Settled Amount'].sum()
+    
     total_sale_pcs = ui_report['Total Sale Pcs'].sum()
     total_log_pcs = ui_report['Logistics Return Pcs'].sum()
+    total_cust_pcs = ui_report['Customer Return Pcs'].sum()
 
     st.markdown(f"### 📈 Quick Metrics Summary for **{selected_brand}** ({selected_month} / {selected_mp})")
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("Gross Sales Value", f"₹{sales_sum:,.2f}")
-    kpi2.metric("Net Bank Settled", f"₹{settle_sum:,.2f}")
-    kpi3.metric("Total Sale Items Sold", f"{int(total_sale_pcs):,} Pcs")
-    kpi4.metric("Total Logistic Returns", f"{int(total_log_pcs):,} Pcs")
+    
+    # 1st Row metrics (Quantities)
+    q_kpi1, q_kpi2, q_kpi3 = st.columns(3)
+    q_kpi1.metric("Total Sale Pcs", f"{int(total_sale_pcs):,} Pcs")
+    q_kpi2.metric("Logistics Return Pcs", f"{int(total_log_pcs):,} Pcs")
+    q_kpi3.metric("Customer Return Pcs", f"{int(total_cust_pcs):,} Pcs")
+    
+    # 2nd Row metrics (Financials)
+    f_kpi1, f_kpi2, f_kpi3, f_kpi4, f_kpi5 = st.columns(5)
+    f_kpi1.metric("Gross Sale Amt", f"₹{sales_sum:,.2f}")
+    f_kpi2.metric("Total Refund", f"₹{refund_sum:,.2f}")
+    f_kpi3.metric("Marketplace Fees", f"₹{fees_sum:,.2f}")
+    f_kpi4.metric("Total ADD Fees", f"₹{add_fees_sum:,.2f}")
+    f_kpi5.metric("Net Settled Amount", f"₹{settle_sum:,.2f}")
 
     st.write("---")
     
@@ -278,7 +296,11 @@ if not df_db_raw.empty:
     display_df = pd.concat([ui_report, total_row], ignore_index=True)
 
     def style_ledger_table(df):
-        return df.style.apply(lambda x: pd.DataFrame([['background-color: #46bdc6; color: black; font-weight: bold;'] * len(df.columns)], index=df.index, columns=df.columns), axis=None)
+        # Apply highlighted style ONLY to the last (TOTAL) row
+        return df.style.apply(
+            lambda x: ['background-color: #46bdc6; color: black; font-weight: bold;' if x.name == len(df)-1 else '' for _ in x], 
+            axis=1
+        )
 
     fmt_rules = {
         'Gross Sale Amt': '₹{:,.2f}', 'Total Refund': '₹{:,.2f}', 'Marketplace Fees': '₹{:,.2f}',
