@@ -1,332 +1,340 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import io
+import plotly.express as px
 from supabase import create_client, Client
 
-# --- Page Config ---
-st.set_page_config(page_title="VIDA LOCA RECO", layout="wide")
-st.title("📊 VIDA LOCA RECO")
+# --- SUPABASE CONFIG ---
+SUPABASE_URL = st.secrets["supabase"]["url"]
+SUPABASE_KEY = st.secrets["supabase"]["key"]
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- Custom Global UI Styling (#46bdc6 Uniform Layout with Fixed Cutoff/Truncation) ---
-st.markdown(
-    """
+# --- APP SETUP & THEME ---
+st.set_page_config(page_title="Design-Wise Financial Summary", layout="wide")
+
+st.markdown("""
     <style>
-    [data-testid="stMetric"] {
-        background-color: #46bdc6 !important;
-        padding: 10px 15px !important;
-        border-radius: 8px !important;
-        border: 1px solid #3197a0 !important;
-        white-space: normal !important;
-        overflow: hidden;
-    }
-    [data-testid="stMetricValue"] {
-        color: black !important;
-        font-weight: bold !important;
-        font-size: 1.6rem !important;
-        word-break: break-all !important;
-    }
-    [data-testid="stMetricLabel"] {
-        color: black !important;
-        font-weight: bold !important;
-        font-size: 0.9rem !important;
-    }
-    div[data-testid="stDataFrame"] table th {
-        background-color: #46bdc6 !important;
-        color: black !important;
-        font-weight: bold !important;
-        border: 1px solid #3197a0 !important;
-        text-align: center !important;
-    }
-    div[data-testid="stDataFrame"] table td {
-        border: 1px solid #3197a0 !important;
-    }
+        .metric-card {
+            background-color: #1e293b;
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: 2px 2px 10px rgba(0,0,0,0.3);
+            text-align: center;
+            border: 1px solid #334155;
+            margin-bottom: 15px;
+        }
+        .metric-title {
+            font-size: 14px;
+            color: #94a3b8;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        .metric-value {
+            font-size: 20px;
+            color: #f8fafc;
+            font-weight: bold;
+        }
+        .stButton>button {
+            width: 100%;
+        }
     </style>
-    """,
-    unsafe_allow_html=True
-)
+""", unsafe_allow_html=True)
 
-# --- Direct Supabase Connection ---
-@st.cache_resource
-def init_supabase() -> Client:
-    url = "https://tpbbngotolgthytgjarp.supabase.co"
-    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRwYmJuZ290b2xndGh5dGdqYXJwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3MzY3NTMsImV4cCI6MjA5OTMxMjc1M30.0uxeXOsMDbAjtAdT_RZlb6NAs-OBlydKr13-lv9l5Lw"
-    return create_client(url, key)
+st.title("📊 Design-Wise Financial Summary Dashboard")
+st.write("Analyze and manage your e-commerce financial performance seamlessly.")
 
+# --- SIDEBAR CONTROL PANEL ---
+st.sidebar.header("⚙️ Control Panel")
+
+# 1. Action Selector
+action = st.sidebar.radio("Choose Action:", ["View Dashboard", "Upload Data"], index=0)
+
+# 2. Global Filters (Always visible in Sidebar for context)
 try:
-    supabase = init_supabase()
-except Exception as e:
-    st.error(f"Supabase Initialize Error: {e}")
-    st.stop()
-
-# --- Load Realtime Cloud Data ---
-@st.cache_data(ttl=30)
-def load_cloud_data():
-    try:
-        res = supabase.table("design_wise_summary").select("*").limit(25000).execute()
-        return pd.DataFrame(res.data)
-    except Exception as e:
-        st.error(f"Data pull errors: {e}")
-        return pd.DataFrame()
-
-df_db_raw = load_cloud_data()
-
-# --- Helper to Parse Numbers ---
-def get_num_val(val):
-    if pd.isna(val):
-        return 0.0
-    val_str = str(val).replace('₹', '').replace(',', '').strip()
-    try:
-        return float(val_str)
-    except:
-        return 0.0
-
-# --- FLIPKART ADVANCED MAPPING & ROW SKIP ENGINE ---
-def process_flipkart_raw(df, brand_name):
-    # Skip any top comment/summary rows if present
-    for i in range(min(20, len(df))):
-        row_str = [str(x).lower().strip() for x in df.iloc[i].dropna().values]
-        if any('order item id' in x or 'quantity' in x or 'sale amount' in x for x in row_str):
-            df.columns = [str(c).strip() for c in df.iloc[i]]
-            df = df.iloc[i+1:].reset_index(drop=True)
-            break
-
-    df.columns = [str(c).replace('\n', ' ').strip() for c in df.columns]
-    col_mapping = {c.lower(): c for c in df.columns}
-    
-    qty_col = next((col_mapping[k] for k in col_mapping if 'quantity' in k or 'qty' in k), None)
-    sale_col = next((col_mapping[k] for k in col_mapping if 'sale amount' in k or 'sale_amt' in k), None)
-    refund_col = next((col_mapping[k] for k in col_mapping if 'refund' in k), None)
-    fee_col = next((col_mapping[k] for k in col_mapping if 'marketplace fee' in k or 'fee' in k), None)
-    add_col = next((col_mapping[k] for k in col_mapping if 'offer adjustment' in k or 'settlement value add' in k or 'add' in k), None)
-    settle_col = next((col_mapping[k] for k in col_mapping if 'bank settlement' in k or 'settled' in k), None)
-    
-    sku_col = next((col_mapping[k] for k in col_mapping if 'seller sku' in k or 'sku' in k or 'design' in k), None)
-    return_type_col = next((col_mapping[k] for k in col_mapping if 'return type' in k or 'return_type' in k or 'return' in k), None)
-    date_col = next((col_mapping[k] for k in col_mapping if 'payment date' in k or 'date' in k), None)
-
-    if not qty_col or not sku_col:
-        st.error("❌ 'Quantity/Qty' ya 'Seller SKU/Design' column sheet mein nahi mila! Kripya sahi sheet select karein.")
-        st.stop()
-
-    # Create dynamic Month column
-    if date_col:
-        df['Month'] = pd.to_datetime(df[date_col], errors='coerce').dt.strftime('%B-%Y').fillna('Unknown-Month')
+    meta_query = supabase.table("design_wise_summary").select("brand, marketplace, month_year").execute()
+    if meta_query.data:
+        meta_df = pd.DataFrame(meta_query.data)
+        available_brands = sorted(meta_df['brand'].unique()) if 'brand' in meta_df.columns else []
+        available_marketplaces = sorted(meta_df['marketplace'].unique()) if 'marketplace' in meta_df.columns else []
+        available_months = sorted(meta_df['month_year'].unique()) if 'month_year' in meta_df.columns else []
     else:
-        df['Month'] = 'Unknown-Month'
+        available_brands, available_marketplaces, available_months = [], [], []
+except Exception as e:
+    available_brands, available_marketplaces, available_months = [], [], []
 
-    df['Clean_Qty'] = pd.to_numeric(df[qty_col], errors='coerce').fillna(0).astype(int)
-    df['Clean_Sale'] = df[sale_col].apply(get_num_val) if sale_col else 0.0
-    df['Clean_Refund'] = df[refund_col].apply(get_num_val) if refund_col else 0.0
-    df['Clean_Fee'] = df[fee_col].apply(get_num_val) if fee_col else 0.0
-    df['Clean_Add'] = df[add_col].apply(get_num_val) if add_col else 0.0
-    df['Clean_Settle'] = df[settle_col].apply(get_num_val) if settle_col else 0.0
-    
-    # Advanced Return categorization logic
-    df['Temp_Return'] = df[return_type_col].fillna('NA').astype(str).str.strip().str.upper() if return_type_col else 'NA'
-    
-    df['Is_Sale'] = np.where(df['Temp_Return'] == 'NA', df['Clean_Qty'], 0)
-    df['Logistics_Return'] = np.where(df['Temp_Return'].str.contains('RTO|DTO|COURIER', case=False, na=False), df['Clean_Qty'], 0)
-    df['Customer_Return'] = np.where(df['Temp_Return'].str.contains('CUSTOMER', case=False, na=False), df['Clean_Qty'], 0)
-    
-    # Grouping by multi-dimensional entities
-    summary = df.groupby(['Month', sku_col]).agg({
-        'Is_Sale': 'sum',
-        'Logistics_Return': 'sum',
-        'Customer_Return': 'sum',
-        'Clean_Sale': 'sum',
-        'Clean_Refund': 'sum',
-        'Clean_Fee': 'sum',
-        'Clean_Add': 'sum',
-        'Clean_Settle': 'sum'
-    }).reset_index()
-    
-    summary.columns = [
-        'month', 'design', 'sale_qty', 'logistics_return_qty', 'customer_return_qty',
-        'sale_amount', 'return_amount', 'marketplace_fee', 'add_fees', 'settlement_amount'
-    ]
-    summary['marketplace'] = 'FLIPKART'
-    summary['brand'] = brand_name
-    
-    return summary
+selected_brand = st.sidebar.selectbox("Filter Brand:", ["ALL"] + available_brands, index=0)
+selected_mp = st.sidebar.selectbox("Filter Marketplace:", ["ALL"] + available_marketplaces, index=0)
+selected_month = st.sidebar.selectbox("Filter Month-Year:", ["ALL"] + available_months, index=0)
 
-# --- Sidebar Upload Panel ---
-st.sidebar.markdown("## 📤 Cloud Data Sync Center")
-upload_brand = st.sidebar.text_input("Brand Name:", "RECOAPPPY").strip().upper()
-mp_type = st.sidebar.selectbox("Marketplace:", ["FLIPKART", "AMAZON", "MEESHO"])
-uploaded_file = st.sidebar.file_uploader("Settle Payment Sheet Upload Karein", type=["csv", "xlsx"])
+# --- HELPER: UNIFY COLUMN NAMES ---
+def find_and_map_column(df, possible_names, default=None):
+    """Finds a column in df matching any of the possible names (case-insensitive)."""
+    df_cols_lower = {col.lower().strip(): col for col in df.columns}
+    for name in possible_names:
+        name_lower = name.lower().strip()
+        if name_lower in df_cols_lower:
+            return df_cols_lower[name_lower]
+    return default
 
-if uploaded_file is not None:
-    if st.sidebar.button("🚀 Push to Database & Refresh Dashboard"):
-        with st.spinner("Processing calculations..."):
-            try:
-                if uploaded_file.name.endswith('.csv'):
-                    df_raw = pd.read_csv(uploaded_file, low_memory=False)
+# ==========================================
+# ACTION: UPLOAD DATA
+# ==========================================
+if action == "Upload Data":
+    st.header("📤 Upload & Process Financial Report")
+    
+    upload_brand = st.text_input("Enter Brand Name:", "RECOAPPPY").strip().upper()
+    upload_mp = st.selectbox("Select Marketplace:", ["FLIPKART", "AMAZON", "MEESHO", "MYNTRA"])
+    upload_month = st.text_input("Enter Month-Year (e.g., APR_26):", "APR_26").strip().upper()
+    
+    uploaded_file = st.file_uploader("Upload Excel/CSV File", type=["xlsx", "csv"])
+    
+    if uploaded_file is not None:
+        try:
+            # Read file
+            if uploaded_file.name.endswith('.csv'):
+                df_raw = pd.read_csv(uploaded_file)
+            else:
+                df_raw = pd.read_excel(uploaded_file)
+                
+            st.success("File uploaded successfully! Processing columns...")
+            
+            # --- Column Mapping Definitions ---
+            design_col = find_and_map_column(df_raw, ["fsn", "sku", "design", "style", "style code", "style_code", "product_id"])
+            gross_sale_col = find_and_map_column(df_raw, ["gross sale amt", "sale_amount", "sales", "order amount", "gross sales"])
+            refund_col = find_and_map_column(df_raw, ["total refund", "refund", "refund_amount", "customer return value"])
+            mp_fees_col = find_and_map_column(df_raw, ["marketplace fees", "fees", "commission", "marketplace_fee"])
+            add_fees_col = find_and_map_column(df_raw, ["total add fees", "add_fees", "other_fees", "ads_fees", "advertisement"])
+            net_settled_col = find_and_map_column(df_raw, ["net settled amount", "net settled", "payout", "net_amount"])
+            
+            # Quantity Columns Mapping
+            qty_col = find_and_map_column(df_raw, ["quantity", "qty", "pieces", "pcs", "ordered qty", "sale qty", "sale_qty", "total_sale_pcs"])
+            return_type_col = find_and_map_column(df_raw, ["return type", "return_type", "order status", "status", "shipment status"])
+            
+            # Fallback if specific qty columns don't exist but we have returns columns
+            logistics_col = find_and_map_column(df_raw, ["logistics return", "logistics_return_pcs", "rto qty", "rto_quantity"])
+            customer_ret_col = find_and_map_column(df_raw, ["customer return", "customer_return_pcs", "customer return qty"])
+
+            # Verify design column
+            if not design_col:
+                st.error("Could not detect Style/SKU/Design column. Please rename your column to 'SKU' or 'Design' and try again.")
+            else:
+                # Clean up values
+                df_raw[design_col] = df_raw[design_col].astype(str).str.strip()
+                
+                # Dynamic Quantity Calculations
+                if qty_col:
+                    df_raw['Clean_Qty'] = pd.to_numeric(df_raw[qty_col], errors='coerce').fillna(0).astype(int)
                 else:
-                    xl = pd.ExcelFile(uploaded_file)
-                    target = 'Orders' if 'Orders' in xl.sheet_names else xl.sheet_names[0]
-                    df_raw = pd.read_excel(uploaded_file, sheet_name=target)
+                    df_raw['Clean_Qty'] = 1  # Fallback to 1 if no quantity is found
                 
-                if mp_type == "FLIPKART":
-                    summary_df = process_flipkart_raw(df_raw, upload_brand)
-                
-                # Dynamic Safe Filter
-                db_records = summary_df.to_dict(orient='records')
-                
-                # Delete existing entries safely
-                try:
-                    supabase.table("design_wise_summary").delete().eq("marketplace", mp_type).eq("brand", upload_brand).execute()
-                except:
-                    pass
-                
-                # Batch push to database safely
-                chunk_size = 200
-                for i in range(0, len(db_records), chunk_size):
-                    row_data = db_records[i:i+chunk_size]
-                    try:
-                        supabase.table("design_wise_summary").insert(row_data).execute()
-                    except Exception as ins_err:
-                        # Fallback try if database table structure schema mismatch occurs
-                        supabase.table("design_wise_summary").insert(row_data).execute()
-                
-                st.cache_data.clear()
-                st.sidebar.success("🎉 Database successfully synced!")
-                st.rerun()
-            except Exception as e:
-                st.sidebar.error(f"Error during push operation: {e}")
+                # Check for returns classification
+                if return_type_col:
+                    df_raw['Temp_Return'] = df_raw[return_type_col].astype(str).str.strip().fillna('NA')
+                    df_raw['Is_Sale'] = np.where(df_raw['Temp_Return'].str.contains('rto|customer|return|cancelled', case=False, na=False), 0, df_raw['Clean_Qty'])
+                    df_raw['Logistics_Return'] = np.where(df_raw['Temp_Return'].str.contains('rto|dto|courier', case=False, na=False), df_raw['Clean_Qty'], 0)
+                    df_raw['Customer_Return'] = np.where(df_raw['Temp_Return'].str.contains('customer', case=False, na=False), df_raw['Clean_Qty'], 0)
+                else:
+                    # If no return type status column, try to map directly from detected return columns
+                    df_raw['Logistics_Return'] = pd.to_numeric(df_raw[logistics_col], errors='coerce').fillna(0).astype(int) if logistics_col else 0
+                    df_raw['Customer_Return'] = pd.to_numeric(df_raw[customer_ret_col], errors='coerce').fillna(0).astype(int) if customer_ret_col else 0
+                    # If it has returns but no explicit sale qty, we calculate Is_Sale
+                    df_raw['Is_Sale'] = df_raw['Clean_Qty'] - df_raw['Logistics_Return'] - df_raw['Customer_Return']
+                    df_raw['Is_Sale'] = df_raw['Is_Sale'].clip(lower=0)
 
-# --- Main Consolidated Dashboard Controls ---
-st.markdown("## 🎯 Realtime Global Filters (Brand / Month / Marketplace)")
+                # Map numeric financial fields
+                def clean_numeric(col_name):
+                    if col_name:
+                        return pd.to_numeric(df_raw[col_name], errors='coerce').fillna(0)
+                    return pd.Series(0, index=df_raw.index)
 
-if not df_db_raw.empty:
-    # Standardize incoming database columns to lowercase
-    df_db_raw.columns = [c.lower() for c in df_db_raw.columns]
-    df_db_raw['brand'] = df_db_raw['brand'].astype(str).str.upper().str.strip()
-    
-    # 3-Way Filters Row
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        unique_brands = sorted(list(df_db_raw['brand'].dropna().unique()))
-        selected_brand = st.selectbox("⭐ Select Brand:", unique_brands)
-    with c2:
-        df_b_filtered = df_db_raw[df_db_raw['brand'] == selected_brand]
-        unique_months = ["All"] + sorted(list(df_b_filtered['month'].dropna().unique()))
-        selected_month = st.selectbox("📅 Select Month:", unique_months)
-    with c3:
-        unique_mps = ["All"] + sorted(list(df_b_filtered['marketplace'].dropna().unique()))
-        selected_mp = st.selectbox("🌐 Select Marketplace:", unique_mps)
-        
-    df_final = df_b_filtered.copy()
-    if selected_month != "All":
-        df_final = df_final[df_final['month'] == selected_month]
-    if selected_mp != "All":
-        df_final = df_final[df_final['marketplace'] == selected_mp]
-        
-    # --- DYNAMIC COLUMN ALIGNMENT ENGINE (FLEXIBLE ALIAS MATCHING) ---
-    # Database column keys can be varied. We dynamically scan all variations.
-    column_mappings = {
-        'sale_qty': ['sale_qty', 'is_sale', 'sale_quantity', 'qty', 'sales_qty', 'total_sale_pcs'],
-        'logistics_return_qty': ['logistics_return_qty', 'logistics_return_pcs', 'logistics_return', 'logistics_qty'],
-        'customer_return_qty': ['customer_return_qty', 'customer_return_pcs', 'customer_return', 'customer_qty'],
-        'sale_amount': ['sale_amount', 'gross_sale_amt', 'sales_amount', 'sale_amt'],
-        'return_amount': ['return_amount', 'total_refund', 'refund_amount', 'return_amt'],
-        'marketplace_fee': ['marketplace_fee', 'marketplace_fees', 'fee'],
-        'add_fees': ['add_fees', 'total_add_fees', 'add_fee'],
-        'settlement_amount': ['settlement_amount', 'net_settled_amount', 'settled_amount', 'settle_amount']
-    }
-    
-    # Map matched columns or fallback to default 0.0 safely
-    for standard_col, aliases in column_mappings.items():
-        matched_col = next((col for col in df_final.columns if col in aliases or col.replace('_', '') in [a.replace('_', '') for a in aliases]), None)
-        if matched_col:
-            df_final[standard_col] = pd.to_numeric(df_final[matched_col], errors='coerce').fillna(0.0)
-        else:
-            df_final[standard_col] = 0.0
+                df_raw['Gross_Sale_Clean'] = clean_numeric(gross_sale_col)
+                df_raw['Refund_Clean'] = clean_numeric(refund_col)
+                df_raw['Fees_Clean'] = clean_numeric(mp_fees_col)
+                df_raw['Add_Fees_Clean'] = clean_numeric(add_fees_col)
+                df_raw['Net_Settled_Clean'] = clean_numeric(net_settled_col)
 
-    # Aggregate consolidated views
-    ui_report = df_final.groupby(['month', 'marketplace', 'brand', 'design']).agg({
-        'sale_qty': 'sum',
-        'logistics_return_qty': 'sum',
-        'customer_return_qty': 'sum',
-        'sale_amount': 'sum',
-        'return_amount': 'sum',
-        'marketplace_fee': 'sum',
-        'add_fees': 'sum',
-        'settlement_amount': 'sum'
-    }).reset_index()
+                # Group by Design / SKU
+                summary_df = df_raw.groupby(design_col).agg({
+                    'Gross_Sale_Clean': 'sum',
+                    'Refund_Clean': 'sum',
+                    'Fees_Clean': 'sum',
+                    'Add_Fees_Clean': 'sum',
+                    'Net_Settled_Clean': 'sum',
+                    'Is_Sale': 'sum',
+                    'Logistics_Return': 'sum',
+                    'Customer_Return': 'sum'
+                }).reset_index()
 
-    # Rename columns to user friendly UI grid headers
-    ui_report.columns = [
-        'Month', 'Marketplace', 'Brand', 'Seller SKU / Design', 'Total Sale Pcs', 
-        'Logistics Return Pcs', 'Customer Return Pcs', 'Gross Sale Amt', 
-        'Total Refund', 'Marketplace Fees', 'Total ADD Fees', 'Net Settled Amount'
-    ]
+                # Build final payload
+                db_payload = []
+                for _, row in summary_df.iterrows():
+                    db_payload.append({
+                        "brand": upload_brand,
+                        "marketplace": upload_mp,
+                        "month_year": upload_month,
+                        "design": str(row[design_col]),
+                        "gross_sale_amt": float(row['Gross_Sale_Clean']),
+                        "total_refund": float(row['Refund_Clean']),
+                        "marketplace_fees": float(row['Fees_Clean']),
+                        "total_add_fees": float(row['Add_Fees_Clean']),
+                        "net_settled_amount": float(row['Net_Settled_Clean']),
+                        # Storing multiple variants to ensure successful queries later
+                        "total_sale_pcs": int(row['Is_Sale']),
+                        "sale_qty": int(row['Is_Sale']),
+                        "logistics_return_pcs": int(row['Logistics_Return']),
+                        "logistics_return_qty": int(row['Logistics_Return']),
+                        "customer_return_pcs": int(row['Customer_Return']),
+                        "customer_return_qty": int(row['Customer_Return'])
+                    })
 
-    # Global KPI sums
-    sales_sum = ui_report['Gross Sale Amt'].sum()
-    refund_sum = ui_report['Total Refund'].sum()
-    fees_sum = ui_report['Marketplace Fees'].sum()
-    add_fees_sum = ui_report['Total ADD Fees'].sum()
-    settle_sum = ui_report['Net Settled Amount'].sum()
-    
-    total_sale_pcs = ui_report['Total Sale Pcs'].sum()
-    total_log_pcs = ui_report['Logistics Return Pcs'].sum()
-    total_cust_pcs = ui_report['Customer Return Pcs'].sum()
+                # Insert to Supabase
+                if db_payload:
+                    # Clear old records for this brand/mp/month to prevent duplicates
+                    supabase.table("design_wise_summary").delete()\
+                        .eq("marketplace", upload_mp)\
+                        .eq("brand", upload_brand)\
+                        .eq("month_year", upload_month)\
+                        .execute()
+                    
+                    # Insert new processed batch
+                    response = supabase.table("design_wise_summary").insert(db_payload).execute()
+                    st.success(f"Successfully processed and uploaded {len(db_payload)} records for {upload_brand} ({upload_mp} - {upload_month})!")
+                    
+                    # Preview upload
+                    st.dataframe(pd.DataFrame(db_payload).head(10))
+                else:
+                    st.warning("No valid data rows found to process.")
+                    
+        except Exception as e:
+            st.error(f"Error processing sheet: {str(e)}")
 
-    st.markdown(f"### 📈 Quick Metrics Summary for **{selected_brand}** ({selected_month} / {selected_mp})")
-    
-    # 1st Row metrics (Quantities)
-    q_kpi1, q_kpi2, q_kpi3 = st.columns(3)
-    q_kpi1.metric("Total Sale Pcs", f"{int(total_sale_pcs):,} Pcs")
-    q_kpi2.metric("Logistics Return Pcs", f"{int(total_log_pcs):,} Pcs")
-    q_kpi3.metric("Customer Return Pcs", f"{int(total_cust_pcs):,} Pcs")
-    
-    # 2nd Row metrics (Financials)
-    f_kpi1, f_kpi2, f_kpi3, f_kpi4, f_kpi5 = st.columns(5)
-    f_kpi1.metric("Gross Sale Amt", f"₹{sales_sum:,.2f}")
-    f_kpi2.metric("Total Refund", f"₹{refund_sum:,.2f}")
-    f_kpi3.metric("Marketplace Fees", f"₹{fees_sum:,.2f}")
-    f_kpi4.metric("Total ADD Fees", f"₹{add_fees_sum:,.2f}")
-    f_kpi5.metric("Net Settled Amount", f"₹{settle_sum:,.2f}")
-
-    st.write("---")
-    
-    # Injecting Bottom Dynamic TOTAL Row
-    total_row = pd.DataFrame([{
-        'Month': 'TOTAL', 'Marketplace': '', 'Brand': '', 'Seller SKU / Design': '',
-        'Total Sale Pcs': ui_report['Total Sale Pcs'].sum(),
-        'Logistics Return Pcs': ui_report['Logistics Return Pcs'].sum(),
-        'Customer Return Pcs': ui_report['Customer Return Pcs'].sum(),
-        'Gross Sale Amt': ui_report['Gross Sale Amt'].sum(),
-        'Total Refund': ui_report['Total Refund'].sum(),
-        'Marketplace Fees': ui_report['Marketplace Fees'].sum(),
-        'Total ADD Fees': ui_report['Total ADD Fees'].sum(),
-        'Net Settled Amount': ui_report['Net Settled Amount'].sum()
-    }])
-    
-    display_df = pd.concat([ui_report, total_row], ignore_index=True)
-
-    def style_ledger_table(df):
-        return df.style.apply(
-            lambda x: ['background-color: #46bdc6; color: black; font-weight: bold;' if x.name == len(df)-1 else '' for _ in x], 
-            axis=1
-        )
-
-    fmt_rules = {
-        'Gross Sale Amt': '₹{:,.2f}', 'Total Refund': '₹{:,.2f}', 'Marketplace Fees': '₹{:,.2f}',
-        'Total ADD Fees': '₹{:,.2f}', 'Net Settled Amount': '₹{:,.2f}',
-        'Total Sale Pcs': '{:,.0f}', 'Logistics Return Pcs': '{:,.0f}', 'Customer Return Pcs': '{:,.0f}'
-    }
-    
-    styled_df = style_ledger_table(display_df).format(fmt_rules)
-    
-    st.subheader(f"📋 Live Consolidated Ledger Matrix: {selected_brand}")
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
-    
-    st.download_button(
-        label=f"📥 Download Report ({selected_brand})",
-        data=ui_report.to_csv(index=False).encode('utf-8'),
-        file_name=f'{selected_brand}_Consolidated_Report.csv',
-        mime='text/csv'
-    )
+# ==========================================
+# ACTION: VIEW DASHBOARD
+# ==========================================
 else:
-    st.info("Database khali hai ya dynamic pull response waiting me h. Kripya side panel se main sheet upload karke database refresh karein.")
+    # Fetch Data
+    try:
+        query = supabase.table("design_wise_summary").select("*")
+        
+        # Apply filters in query if selected
+        if selected_brand != "ALL":
+            query = query.eq("brand", selected_brand)
+        if selected_mp != "ALL":
+            query = query.eq("marketplace", selected_mp)
+        if selected_month != "ALL":
+            query = query.eq("month_year", selected_month)
+            
+        response = query.execute()
+        
+        if response.data:
+            df = pd.DataFrame(response.data)
+            
+            # --- DATABASE COLS DEBUGGER ---
+            with st.expander("🔍 Debug Database Columns & Raw Values (Check if fields are 0 in DB)"):
+                st.write("**Real database column names found:**", list(df.columns))
+                st.write("**Top 5 database rows:**")
+                st.dataframe(df.head(5))
+            
+            # Clean and match column names safely
+            def align_column(df, target_col, candidate_names):
+                matched = find_and_map_column(df, candidate_names)
+                if matched:
+                    df[target_col] = pd.to_numeric(df[matched], errors='coerce').fillna(0)
+                else:
+                    df[target_col] = 0.0
+
+            # Match and rename dynamic DB fields to standard fields
+            align_column(df, 'gross_sale_amt', ['gross_sale_amt', 'gross_sales', 'gross sale amt'])
+            align_column(df, 'total_refund', ['total_refund', 'refund', 'total refund'])
+            align_column(df, 'marketplace_fees', ['marketplace_fees', 'fees', 'marketplace fees'])
+            align_column(df, 'total_add_fees', ['total_add_fees', 'add_fees', 'total add fees'])
+            align_column(df, 'net_settled_amount', ['net_settled_amount', 'net_settled', 'net settled amount'])
+            
+            # Quantity fields matching
+            align_column(df, 'total_sale_pcs', ['total_sale_pcs', 'sale_qty', 'sale_quantity', 'is_sale'])
+            align_column(df, 'logistics_return_pcs', ['logistics_return_pcs', 'logistics_return_qty', 'logistics_return'])
+            align_column(df, 'customer_return_pcs', ['customer_return_pcs', 'customer_return_qty', 'customer_return'])
+
+            # --- CALCULATE METRICS ---
+            total_sales_val = df['gross_sale_amt'].sum()
+            total_refund_val = df['total_refund'].sum()
+            total_fees_val = df['marketplace_fees'].sum()
+            total_add_val = df['total_add_fees'].sum()
+            total_net_val = df['net_settled_amount'].sum()
+            
+            total_sale_qty = int(df['total_sale_pcs'].sum())
+            total_log_qty = int(df['logistics_return_pcs'].sum())
+            total_cust_qty = int(df['customer_return_pcs'].sum())
+            total_dispatch_qty = total_sale_qty + total_log_qty + total_cust_qty
+            
+            # Formatted KPIs
+            col1, col2, col3, col4, col5 = st.columns(5)
+            with col1:
+                st.markdown(f'<div class="metric-card"><div class="metric-title">Gross Sales</div><div class="metric-value">₹ {total_sales_val:,.2f}</div></div>', unsafe_allow_html=True)
+            with col2:
+                st.markdown(f'<div class="metric-card"><div class="metric-title">Total Refund</div><div class="metric-value">₹ {total_refund_val:,.2f}</div></div>', unsafe_allow_html=True)
+            with col3:
+                st.markdown(f'<div class="metric-card"><div class="metric-title">Marketplace Fees</div><div class="metric-value">₹ {total_fees_val:,.2f}</div></div>', unsafe_allow_html=True)
+            with col4:
+                st.markdown(f'<div class="metric-card"><div class="metric-title">Total ADD Fees</div><div class="metric-value">₹ {total_add_val:,.2f}</div></div>', unsafe_allow_html=True)
+            with col5:
+                st.markdown(f'<div class="metric-card"><div class="metric-title">Net Settled</div><div class="metric-value">₹ {total_net_val:,.2f}</div></div>', unsafe_allow_html=True)
+
+            # Quantities Section
+            st.subheader("📦 Order & Returns Volume")
+            q1, q2, q3, q4 = st.columns(4)
+            with q1:
+                st.metric("Total Dispatches (Calculated)", f"{total_dispatch_qty} pcs")
+            with q2:
+                st.metric("Total Sales Pcs", f"{total_sale_qty} pcs")
+            with q3:
+                st.metric("Logistics Return Pcs", f"{total_log_qty} pcs")
+            with q4:
+                st.metric("Customer Return Pcs", f"{total_cust_qty} pcs")
+
+            # --- VISUALIZATION: TOP DESIGNS ---
+            st.subheader("top_designs", anchor="top-designs-section")
+            st.write("Top 10 performing designs based on Net Payout/Settled Amount.")
+            
+            top_designs = df.groupby('design')['net_settled_amount'].sum().reset_index().sort_values(by='net_settled_amount', ascending=False).head(10)
+            fig = px.bar(
+                top_designs, 
+                x='net_settled_amount', 
+                y='design', 
+                orientation='h', 
+                title="Top 10 Designs by Net Settled Value",
+                labels={'net_settled_amount': 'Net Settled (₹)', 'design': 'Design/SKU'},
+                color='net_settled_amount',
+                color_continuous_scale='Bluered'
+            )
+            fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+            st.plotly_chart(fig, use_container_width=True)
+
+            # --- DETAILED DATA TABLE ---
+            st.subheader("📋 Design-Wise Detailed Breakdown")
+            
+            # Final clean display dataframe
+            display_df = df.groupby('design').agg({
+                'total_sale_pcs': 'sum',
+                'logistics_return_pcs': 'sum',
+                'customer_return_pcs': 'sum',
+                'gross_sale_amt': 'sum',
+                'total_refund': 'sum',
+                'marketplace_fees': 'sum',
+                'total_add_fees': 'sum',
+                'net_settled_amount': 'sum'
+            }).reset_index()
+            
+            # Format currency columns for readable preview
+            formatted_df = display_df.copy()
+            for col in ['gross_sale_amt', 'total_refund', 'marketplace_fees', 'total_add_fees', 'net_settled_amount']:
+                formatted_df[col] = formatted_df[col].apply(lambda x: f"₹ {x:,.2f}")
+            
+            st.dataframe(formatted_df, use_container_width=True, height=400)
+
+        else:
+            st.info("No records found in database. Go to the 'Upload Data' tab in the sidebar to upload your first sheet!")
+            
+    except Exception as e:
+        st.error(f"Error fetching data from database: {str(e)}")
