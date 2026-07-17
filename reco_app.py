@@ -89,11 +89,11 @@ selected_brand = st.sidebar.selectbox("Filter Brand:", ["ALL"] + available_brand
 selected_mp = st.sidebar.selectbox("Filter Marketplace:", ["ALL"] + available_marketplaces, index=0)
 selected_month = st.sidebar.selectbox("Filter Month:", ["ALL"] + available_months, index=0) if (has_month_year or has_month) else "ALL"
 
-# Helper for case-insensitive lookup
+# Helper for robust case-insensitive lookup during Upload
 def find_and_map_column(df, possible_names):
-    df_cols_lower = {str(col).lower().strip(): col for col in df.columns}
+    df_cols_lower = {str(col).lower().replace('\n', ' ').strip(): col for col in df.columns}
     for name in possible_names:
-        name_lower = str(name).lower().strip()
+        name_lower = str(name).lower().replace('\n', ' ').strip()
         if name_lower in df_cols_lower:
             return df_cols_lower[name_lower]
     return None
@@ -107,7 +107,7 @@ if action == "Upload Data":
     upload_brand = st.text_input("Enter Brand Name:", "VIDA LOCA").strip().upper()
     upload_mp = st.selectbox("Select Marketplace:", ["FLIPKART", "AMAZON", "MEESHO", "MYNTRA"])
     
-    uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
+    uploaded_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
     
     if uploaded_file is not None:
         try:
@@ -118,9 +118,9 @@ if action == "Upload Data":
             orders_sheet = 'Orders' if 'Orders' in xls_file.sheet_names else xls_file.sheet_names[0]
             df_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=orders_sheet)
             
-            # Header Row Alignment
+            # Skip intro rows until we find 'Seller SKU' (Standard Flipkart Format)
             if 'Seller SKU' not in df_raw.columns:
-                for i in range(min(5, df_raw.shape[0])):
+                for i in range(min(10, df_raw.shape[0])):
                     if 'Seller SKU' in df_raw.iloc[i].values:
                         df_raw.columns = df_raw.iloc[i]
                         df_raw = df_raw[i+1:].reset_index(drop=True)
@@ -132,7 +132,7 @@ if action == "Upload Data":
                 df_ads_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name='Ads')
                 # Align header for Ads sheet
                 if 'Seller SKU' not in df_ads_raw.columns and 'Settlement Value (Rs.)' not in df_ads_raw.columns:
-                    for i in range(min(5, df_ads_raw.shape[0])):
+                    for i in range(min(10, df_ads_raw.shape[0])):
                         if 'Settlement Value (Rs.)' in df_ads_raw.iloc[i].values or 'Seller SKU' in df_ads_raw.iloc[i].values:
                             df_ads_raw.columns = df_ads_raw.iloc[i]
                             df_ads_raw = df_ads_raw[i+1:].reset_index(drop=True)
@@ -146,25 +146,25 @@ if action == "Upload Data":
                     df_ads_raw['Ads_Cost_Clean'] = pd.to_numeric(df_ads_raw[ads_val_col], errors='coerce').fillna(0)
                     df_ads_summary = df_ads_raw.groupby(ads_sku_col)['Ads_Cost_Clean'].sum().reset_index()
                     df_ads_summary.columns = ['design', 'Ads_Cost']
-                    st.success("✅ Ads sheet metrics mapped and processed successfully!")
+                    st.success("✅ 'Ads' sheet metrics mapped and processed successfully!")
             else:
                 st.warning("⚠️ 'Ads' sheet not found in the file. Total Add Fees will be set to 0.")
 
             # --- EXACT MATCHING FOR ORDERS HEADERS ---
-            design_col = find_and_map_column(df_raw, ["Seller SKU"])
-            date_col = find_and_map_column(df_raw, ["Payment date"])
-            gross_sale_col = find_and_map_column(df_raw, ["Sale Amount Total (Rs.)"])
-            refund_col = find_and_map_column(df_raw, ["Refund (Rs.)"])
-            mp_fees_col = find_and_map_column(df_raw, ["Marketplace Fee (Rs.)"])
-            net_settled_col = find_and_map_column(df_raw, ["My share (Rs.)"])
-            qty_col = find_and_map_column(df_raw, ["Quantity"])
-            return_status_col = find_and_map_column(df_raw, ["Return Type"])
+            design_col = find_and_map_column(df_raw, ["Seller SKU", "sku", "design"])
+            date_col = find_and_map_column(df_raw, ["Payment date", "date"])
+            gross_sale_col = find_and_map_column(df_raw, ["Sale Amount Total (Rs.)", "Sale Amount Total", "gross sales"])
+            refund_col = find_and_map_column(df_raw, ["Refund (Rs.)", "Refund", "total refund"])
+            mp_fees_col = find_and_map_column(df_raw, ["Marketplace Fee (Rs.)", "Marketplace Fee", "fees"])
+            net_settled_col = find_and_map_column(df_raw, ["My share (Rs.)", "My share", "net settled"])
+            qty_col = find_and_map_column(df_raw, ["Quantity", "qty"])
+            return_status_col = find_and_map_column(df_raw, ["Return Type", "status"])
 
             if not design_col:
                 st.error("❌ 'Seller SKU' column not found in Orders headers! Please ensure the columns match.")
                 st.stop()
 
-            # --- DYNAMIC MONTH DETECTION (Payment Date) ---
+            # --- DYNAMIC MONTH DETECTION ---
             detected_month_val = "UNKNOWN"
             if date_col:
                 try:
@@ -176,9 +176,10 @@ if action == "Upload Data":
                 except Exception:
                     pass
             
-            upload_month = st.text_input("Confirm Month Value:", value=detected_month_val).strip().upper()
+            upload_month = st.text_input("Confirm/Edit Month Value:", value=detected_month_val).strip().upper()
 
             if st.button("Process & Upload Data"):
+                # Data Cleaning
                 df_raw[design_col] = df_raw[design_col].astype(str).str.strip()
                 df_raw['Clean_Qty'] = pd.to_numeric(df_raw[qty_col], errors='coerce').fillna(0).astype(int) if qty_col else 1
                 
@@ -189,6 +190,7 @@ if action == "Upload Data":
 
                     df_raw['Logistics_Return'] = np.where(df_raw['Temp_Status'].str.contains('logistics return', na=False), df_raw['Clean_Qty'], 0)
                     df_raw['Customer_Return'] = np.where(df_raw['Temp_Status'].str.contains('customer return', na=False), df_raw['Clean_Qty'], 0)
+                    # Anything marked as NA or Delivered is a Sale
                     df_raw['Is_Sale'] = np.where(df_raw['Temp_Status'].str.contains('na|delivered', na=False) & (df_raw['Logistics_Return'] == 0) & (df_raw['Customer_Return'] == 0), df_raw['Clean_Qty'], 0)
                 else:
                     df_raw['Is_Sale'] = df_raw['Clean_Qty']
@@ -213,9 +215,10 @@ if action == "Upload Data":
                     'Logistics_Return': 'sum',
                     'Customer_Return': 'sum'
                 }).reset_index()
+                
                 summary_df.columns = ['design', 'Gross_Sale', 'Refund', 'Fees', 'Net_Settled', 'Sales_Pcs', 'Log_Pcs', 'Cust_Pcs']
 
-                # --- MERGE ADS COST DATA WITH MAIN SUMMARY ---
+                # --- MERGE ADS COST DATA ---
                 if not df_ads_summary.empty:
                     summary_df = pd.merge(summary_df, df_ads_summary, on='design', how='left').fillna(0)
                 else:
@@ -230,7 +233,7 @@ if action == "Upload Data":
                         "gross_sale_amt": float(row['Gross_Sale']),
                         "total_refund": float(row['Refund']),
                         "marketplace_fees": float(row['Fees']),
-                        "total_add_fees": float(row['Ads_Cost']), # Maps directly to dynamic Ads table
+                        "total_add_fees": float(row['Ads_Cost']),
                         "net_settled_amount": float(row['Net_Settled']),
                         "total_sale_pcs": int(row['Sales_Pcs']),
                         "sale_qty": int(row['Sales_Pcs']),
@@ -258,12 +261,12 @@ if action == "Upload Data":
                     
                     supabase.table("design_wise_summary").insert(db_payload).execute()
                     st.success(f"Processed and uploaded {len(db_payload)} records successfully for month {upload_month}!")
-                    st.dataframe(pd.DataFrame(db_payload).head(10))
+                    st.dataframe(pd.DataFrame(db_payload).head(5))
                 else:
-                    st.warning("Calculated summary is empty.")
+                    st.warning("Processed payload outputs returned empty.")
                     
         except Exception as e:
-            st.error(f"Error processing sheet: {str(e)}")
+            st.error(f"Error processing Excel sheet: {str(e)}")
 
 # ==========================================
 # ACTION: VIEW DASHBOARD
@@ -286,22 +289,22 @@ else:
         if response.data:
             df = pd.DataFrame(response.data)
             
-            def align_column(df, target_col, candidate_names):
-                matched = find_and_map_column(df, candidate_names)
-                if matched:
-                    df[target_col] = pd.to_numeric(df[matched], errors='coerce').fillna(0)
-                else:
-                    df[target_col] = 0.0
-
-            align_column(df, 'gross_sale_amt', ['gross_sale_amt', 'gross_sales'])
-            align_column(df, 'total_refund', ['total_refund', 'refund'])
-            align_column(df, 'marketplace_fees', ['marketplace_fees', 'fees'])
-            align_column(df, 'total_add_fees', ['total_add_fees', 'add_fees'])
-            align_column(df, 'net_settled_amount', ['net_settled_amount', 'net_settled'])
+            # --- DIRECT DATABASE COLUMN FETCHING ---
+            # Hum existing Supabase columns ko seedha call kar rahe hain, purani fuzzy mapping hata di gayi hai.
+            df['gross_sale_amt'] = pd.to_numeric(df.get('gross_sale_amt', 0), errors='coerce').fillna(0)
+            df['total_refund'] = pd.to_numeric(df.get('total_refund', 0), errors='coerce').fillna(0)
+            df['marketplace_fees'] = pd.to_numeric(df.get('marketplace_fees', 0), errors='coerce').fillna(0)
+            df['total_add_fees'] = pd.to_numeric(df.get('total_add_fees', 0), errors='coerce').fillna(0)
+            df['net_settled_amount'] = pd.to_numeric(df.get('net_settled_amount', 0), errors='coerce').fillna(0)
             
-            align_column(df, 'total_sale_pcs', ['total_sale_pcs', 'sale_qty'])
-            align_column(df, 'logistics_return_pcs', ['logistics_return_pcs', 'logistics_return_qty'])
-            align_column(df, 'customer_return_pcs', ['customer_return_pcs', 'customer_return_qty'])
+            # Backup mapping for quantity in case older format exists
+            sale_pcs = df.get('total_sale_pcs', df.get('sale_qty', 0))
+            log_pcs = df.get('logistics_return_pcs', df.get('logistics_return_qty', 0))
+            cust_pcs = df.get('customer_return_pcs', df.get('customer_return_qty', 0))
+            
+            df['total_sale_pcs'] = pd.to_numeric(sale_pcs, errors='coerce').fillna(0)
+            df['logistics_return_pcs'] = pd.to_numeric(log_pcs, errors='coerce').fillna(0)
+            df['customer_return_pcs'] = pd.to_numeric(cust_pcs, errors='coerce').fillna(0)
 
             # --- METRICS CALCULATIONS ---
             total_sales_val = df['gross_sale_amt'].sum()
@@ -373,4 +376,4 @@ else:
         else:
             st.info("No records found. Please upload your Excel sheet via the 'Upload Data' tab first!")
     except Exception as e:
-        st.error(f"Error displaying metrics dashboard: {str(e)}")
+        st.error(f"Error displaying dashboard metrics: {str(e)}")
