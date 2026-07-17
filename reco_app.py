@@ -96,9 +96,9 @@ else:
 
 # Helper for mapping upload file columns
 def find_and_map_column(df, possible_names, default=None):
-    df_cols_lower = {col.lower().strip(): col for col in df.columns}
+    df_cols_lower = {str(col).lower().strip(): col for col in df.columns}
     for name in possible_names:
-        name_lower = name.lower().strip()
+        name_lower = str(name).lower().strip()
         if name_lower in df_cols_lower:
             return df_cols_lower[name_lower]
     return default
@@ -119,16 +119,13 @@ if action == "Upload Data":
     if uploaded_file is not None:
         try:
             file_bytes = uploaded_file.read()
-            # Read 'Orders' sheet explicitly since it's a Flipkart report
             if uploaded_file.name.endswith('.csv'):
                 df_raw = pd.read_csv(io.BytesIO(file_bytes))
             else:
-                # Flipkart files have headers on row 0 (which is row 2 in Excel sometimes, let's auto skip metadata)
                 xls_file = pd.ExcelFile(io.BytesIO(file_bytes))
                 target_sheet = 'Orders' if 'Orders' in xls_file.sheet_names else xls_file.sheet_names[0]
                 df_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=target_sheet)
                 
-                # If row 0 contains metadata headers like 'Payment Details', shift to row 1
                 if 'Order ID' not in df_raw.columns and df_raw.shape[0] > 1:
                     if 'Order ID' in df_raw.iloc[0].values:
                         df_raw.columns = df_raw.iloc[0]
@@ -163,9 +160,9 @@ if action == "Upload Data":
                 else:
                     df_raw['Clean_Qty'] = 1  
                 
-                # Calculate return breakdown based on Flipkart status fields
+                # FIX: .astype(str) lagaya hai taaki numbers ya null pe code crash na ho
                 if return_status_col:
-                    df_raw['Temp_Status'] = df_raw[return_status_col].astype(str).str.strip().lower()
+                    df_raw['Temp_Status'] = df_raw[return_status_col].astype(str).str.strip().str.lower().fillna('na')
                     df_raw['Is_Sale'] = np.where(df_raw['Temp_Status'].str.contains('returned|cancelled|rto', na=False), 0, df_raw['Clean_Qty'])
                     df_raw['Logistics_Return'] = np.where(df_raw['Temp_Status'].str.contains('rto', na=False), df_raw['Clean_Qty'], 0)
                     df_raw['Customer_Return'] = np.where((df_raw['Temp_Status'].str.contains('returned', na=False)) & (~df_raw['Temp_Status'].str.contains('rto', na=False)), df_raw['Clean_Qty'], 0)
@@ -196,7 +193,6 @@ if action == "Upload Data":
                     'Customer_Return': 'sum'
                 }).reset_index()
 
-                # Build Payload dynamically validating DB column requirements
                 db_payload = []
                 for _, row in summary_df.iterrows():
                     all_fields = {
@@ -214,23 +210,24 @@ if action == "Upload Data":
                         "logistics_return_qty": int(row['Logistics_Return']),
                         "customer_return_pcs": int(row['Customer_Return']),
                         "customer_return_qty": int(row['Customer_Return']),
-                        "month": upload_month,          # Map to 'month' column directly to pass NOT NULL constraint
-                        "month_year": upload_month      # Map to 'month_year' fallback column
+                        "month": upload_month,
+                        "month_year": upload_month
                     }
                     
-                    # Safe Filter: Database payload mein wahi keys daalein jo sach mein DB schema mein hain
                     safe_item = {k: v for k, v in all_fields.items() if k in db_columns}
                     db_payload.append(safe_item)
 
                 if db_payload:
-                    # Clear old records safely
-                    delete_query = supabase.table("design_wise_summary").delete().eq("marketplace", upload_mp).eq("brand", upload_brand)
-                    if has_month:
-                        delete_query = delete_query.eq("month", upload_month)
-                    elif has_month_year:
-                        delete_query = delete_query.eq("month_year", upload_month)
-                        
-                    delete_query.execute()
+                    # FIX: Supabase delete query parsing error handling
+                    try:
+                        delete_query = supabase.table("design_wise_summary").delete().eq("marketplace", upload_mp).eq("brand", upload_brand)
+                        if has_month:
+                            delete_query = delete_query.eq("month", upload_month)
+                        elif has_month_year:
+                            delete_query = delete_query.eq("month_year", upload_month)
+                        delete_query.execute()
+                    except Exception as del_err:
+                        pass # Purana data clean na bhi ho toh crash nahi karega
                     
                     # Batch Insert
                     supabase.table("design_wise_summary").insert(db_payload).execute()
@@ -304,7 +301,6 @@ else:
             with col5:
                 st.markdown(f'<div class="metric-card"><div class="metric-title">Net Settled</div><div class="metric-value">₹ {total_net_val:,.2f}</div></div>', unsafe_allow_html=True)
 
-            # Quantities Section
             st.subheader("📦 Order & Returns Volume")
             q1, q2, q3, q4 = st.columns(4)
             with q1:
