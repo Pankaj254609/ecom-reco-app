@@ -7,19 +7,28 @@ from supabase import create_client, Client
 st.set_page_config(page_title="VIDA LOCA RECO", layout="wide")
 st.title("📊 VIDA LOCA RECO")
 
-# --- Custom Global UI Styling (#46bdc6 Uniform Layout) ---
+# --- Custom Global UI Styling (#46bdc6 Uniform Layout with Fixed Cutoff/Truncation) ---
 st.markdown(
     """
     <style>
     [data-testid="stMetric"] {
         background-color: #46bdc6 !important;
-        padding: 15px !important;
+        padding: 10px 15px !important;
         border-radius: 8px !important;
         border: 1px solid #3197a0 !important;
+        white-space: normal !important; /* Elipsis (...) hatane ke liye text wrap karega */
+        overflow: hidden;
     }
-    [data-testid="stMetricValue"], [data-testid="stMetricLabel"] {
+    [data-testid="stMetricValue"] {
         color: black !important;
         font-weight: bold !important;
+        font-size: 1.6rem !important; /* Font size ko thoda chhota kiya taaki bade numbers fit ho jayein */
+        word-break: break-all !important;
+    }
+    [data-testid="stMetricLabel"] {
+        color: black !important;
+        font-weight: bold !important;
+        font-size: 0.9rem !important; /* Label ko compact rakha */
     }
     div[data-testid="stDataFrame"] table th {
         background-color: #46bdc6 !important;
@@ -178,7 +187,6 @@ if uploaded_file is not None:
                         supabase.table("design_wise_summary").insert(row_data).execute()
                     except Exception as ins_err:
                         st.sidebar.warning("⚠️ Database schema mismatch! Retrying with fallback fields...")
-                        # Map fallback column names safely if your supabase schema uses custom key structures
                         for r in row_data:
                             if 'customer_return_qty' not in r:
                                 r['customer_return_qty'] = 0
