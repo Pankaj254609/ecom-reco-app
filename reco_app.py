@@ -139,18 +139,18 @@ if action == "Upload Data":
                 
             return_status_col = st.selectbox("Select Return Type Column (Optional):", ["None"] + all_file_cols, index=get_default_idx(["None"] + all_file_cols, ["return type", "status"]))
 
-            # --- 2. EXPLICIT MAPPING FOR ADS SHEET ---
+            # --- 2. ADVANCED FORMULA-SAFE SCANNER FOR ADS SHEET ---
             total_ads_cost_pool = 0.0
             ads_sheet_name = next((s for s in xls_file.sheet_names if 'ad' in s.lower()), None)
             
             if ads_sheet_name:
-                # Load sheet directly
-                df_ads_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name)
+                # Load with string types to preserve messy strings/formulas safely
+                df_ads_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name, dtype=str)
                 
-                # Dynamic row header finder
+                # Dynamic header row alignment
                 for i in range(min(15, df_ads_raw.shape[0])):
                     row_vals = [str(x).lower().strip() for x in df_ads_raw.iloc[i].values]
-                    if any('settlement' in r or 'neft' in r or 'value' in r for r in row_vals):
+                    if any('settlement' in r or 'sum(g' in r or 'value' in r for r in row_vals):
                         df_ads_raw.columns = df_ads_raw.iloc[i]
                         df_ads_raw = df_ads_raw[i+1:].reset_index(drop=True)
                         break
@@ -158,21 +158,30 @@ if action == "Upload Data":
                 df_ads_raw.columns = [str(c).strip() for c in df_ads_raw.columns]
                 all_ads_cols = list(df_ads_raw.columns)
                 
-                st.info(f"📈 **Please match the Cost Column for Ads Sheet ('{ads_sheet_name}'):**")
-                # Dropdown for explicitly choosing the Ads settlement column
+                # Ultra-Fuzzy Matching to capture "Settlement Value (Rs.) = SUM(G:K)" safely
+                matched_target_col = None
+                for c in all_ads_cols:
+                    lower_c = c.lower()
+                    if 'sum(g' in lower_c or 'settlement value' in lower_c or 'ad cost' in lower_c:
+                        matched_target_col = c
+                        break
+                
+                # Fallback to display mapping option if auto-match fails
+                st.info(f"📈 **Ads Sheet Named Column Configurations ('{ads_sheet_name}'):**")
                 ads_val_col = st.selectbox(
-                    "Select Ads Cost / Settlement Value Column:", 
+                    "Confirm/Select the Ads Cost Column manually if needed:", 
                     all_ads_cols, 
-                    index=get_default_idx(all_ads_cols, ["settlement value", "ad cost", "cost", "value", "sum(g:k)"])
+                    index=all_ads_cols.index(matched_target_col) if matched_target_col in all_ads_cols else 0
                 )
                 
                 if ads_val_col:
-                    # Clean text symbols like ₹, spaces, or commas, handle both negative/positive values safely
-                    s_ads = df_ads_raw[ads_val_col].astype(str).str.replace('₹', '', regex=False).str.replace(',', '', regex=False).str.replace(' ', '', regex=False).str.strip()
+                    # Clean string objects completely of characters, brackets, currency signs
+                    s_ads = df_ads_raw[ads_val_col].astype(str).str.replace('₹', '', regex=False)
+                    s_ads = s_ads.str.replace(',', '', regex=False).str.replace(' ', '', regex=False).str.strip()
                     numeric_ads = pd.to_numeric(s_ads, errors='coerce').fillna(0)
                     total_ads_cost_pool = float(numeric_ads.abs().sum())
                     
-                    st.success(f"✅ Real-Time Ads Amount Parsed: **₹ {total_ads_cost_pool:,.2f}**")
+                    st.success(f"✅ Target Column Parsed Successfully! Detected Ads Total: **₹ {total_ads_cost_pool:,.2f}**")
             else:
                 st.warning("⚠️ No sheet containing name 'Ads' or 'ad' found.")
 
@@ -224,7 +233,6 @@ if action == "Upload Data":
                 
                 summary_df.columns = ['design', 'Gross_Sale', 'Refund', 'Fees', 'Net_Settled', 'Sales_Pcs', 'Log_Pcs', 'Cust_Pcs']
 
-                # Distribute global Ads Cost Pool among available unique designs equally
                 unique_designs_count = len(summary_df)
                 if unique_designs_count > 0 and total_ads_cost_pool > 0:
                     summary_df['Ads_Cost'] = total_ads_cost_pool / unique_designs_count
