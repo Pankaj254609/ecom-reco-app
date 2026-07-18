@@ -103,7 +103,7 @@ if action == "Upload Data":
     upload_brand = st.text_input("Enter Brand Name:", "VIDA LOCA").strip().upper()
     upload_mp = st.selectbox("Select Marketplace:", ["FLIPKART", "AMAZON", "MEESHO", "MYNTRA"])
     
-    # 🎯 MANUAL INPUT BOX FOR ADS COST (Full Proof Solution)
+    # MANUAL INPUT BOX
     manual_ads_input = st.number_input("💵 Enter Total Ads Cost Manually (from your Excel sheet):", min_value=0.0, value=0.0, step=500.0)
     
     uploaded_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
@@ -113,7 +113,6 @@ if action == "Upload Data":
             file_bytes = uploaded_file.read()
             xls_file = pd.ExcelFile(io.BytesIO(file_bytes))
             
-            # --- READ ORDERS SHEET ---
             orders_sheet = 'Orders' if 'Orders' in xls_file.sheet_names else xls_file.sheet_names[0]
             df_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=orders_sheet)
             
@@ -216,7 +215,17 @@ if action == "Upload Data":
                         "month": upload_month,
                         "month_year": upload_month
                     }
-                    safe_item = {k: v for k, v in all_fields.items() if k in db_columns}
+                    
+                    # 🎯 CORE FIX: Agar dynamic check column skip kar raha ho, force insert standard naming fallback.
+                    safe_item = {}
+                    for k, v in all_fields.items():
+                        if k in db_columns:
+                            safe_item[k] = v
+                    
+                    # Agar table me dynamic fetch nahi hua toh defaults manually populate honge
+                    if 'total_add_fees' not in safe_item and 'total_add_fees' in all_fields:
+                        safe_item['total_add_fees'] = all_fields['total_add_fees']
+                        
                     db_payload.append(safe_item)
 
                 if db_payload:
@@ -230,7 +239,7 @@ if action == "Upload Data":
                         pass
                     
                     supabase.table("design_wise_summary").insert(db_payload).execute()
-                    st.success(f"🎉 Success! Uploaded {len(db_payload)} rows. Total Manual Ads Fee of ₹ {manual_ads_input:,.2f} has been perfectly processed into database!")
+                    st.success(f"🎉 Success! Data Processed & Saved to Database!")
                     st.balloons()
                 else:
                     st.error("Processing generated empty data framework.")
@@ -258,10 +267,20 @@ else:
         if response.data:
             df = pd.DataFrame(response.data)
             
+            # 🎯 DASHBOARD READ FIX: Ads value check
+            # Agar query data keys check karein, database se dynamic values pull hone par alag alag maps ko combine karega.
+            possibilities = ['total_add_fees', 'total_add_fee', 'add_fees', 'total_add_fees_amt']
+            ads_col_found = next((c for c in possibilities if c in df.columns), None)
+            
             df['gross_sale_amt'] = pd.to_numeric(df.get('gross_sale_amt', 0), errors='coerce').fillna(0)
             df['total_refund'] = pd.to_numeric(df.get('total_refund', 0), errors='coerce').fillna(0)
             df['marketplace_fees'] = pd.to_numeric(df.get('marketplace_fees', 0), errors='coerce').fillna(0)
-            df['total_add_fees'] = pd.to_numeric(df.get('total_add_fees', 0), errors='coerce').fillna(0)
+            
+            if ads_col_found:
+                df['total_add_fees'] = pd.to_numeric(df[ads_col_found], errors='coerce').fillna(0)
+            else:
+                df['total_add_fees'] = pd.to_numeric(df.get('total_add_fees', 0), errors='coerce').fillna(0)
+                
             df['net_settled_amount'] = pd.to_numeric(df.get('net_settled_amount', 0), errors='coerce').fillna(0)
             
             df['total_sale_pcs'] = pd.to_numeric(df.get('total_sale_pcs', df.get('sale_qty', 0)), errors='coerce').fillna(0)
