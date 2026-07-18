@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import io
 import plotly.express as px
-import re
 from supabase import create_client, Client
 
 # --- SUPABASE CONFIG ---
@@ -95,15 +94,6 @@ def get_default_idx(lst, keywords):
                 return idx
     return 0
 
-# Helper function to convert Excel Column Letters (A, B, C...) to 0-based index numbers
-def col_to_idx(col_str):
-    exp = 0
-    idx = 0
-    for char in reversed(col_str.upper()):
-        idx += (ord(char) - 64) * (26 ** exp)
-        exp += 1
-    return idx - 1
-
 # ==========================================
 # ACTION: UPLOAD DATA
 # ==========================================
@@ -126,8 +116,8 @@ if action == "Upload Data":
             
             target_keywords = ['sku', 'seller sku', 'sale amount', 'my share', 'refund']
             for i in range(min(15, df_raw.shape[0])):
-                row_str_vals = [[str(x).lower().strip() for x in df_raw.iloc[i].values]]
-                if any(k in row_str_vals[0] for k in target_keywords):
+                row_str_vals = [str(x).lower().strip() for x in df_raw.iloc[i].values]
+                if any(k in row_str_vals for k in target_keywords):
                     df_raw.columns = df_raw.iloc[i]
                     df_raw = df_raw[i+1:].reset_index(drop=True)
                     break
@@ -149,65 +139,56 @@ if action == "Upload Data":
                 
             return_status_col = st.selectbox("Select Return Type Column (Optional):", ["None"] + all_file_cols, index=get_default_idx(["None"] + all_file_cols, ["return type", "status"]))
 
-            # --- 2. ADVANCED FORMULA PARSER FOR ADS SHEET ---
+            # --- 2. THE IRONCLAD ADS PARSER ---
             total_ads_cost_pool = 0.0
             ads_sheet_name = next((s for s in xls_file.sheet_names if 'ad' in s.lower()), None)
             
             if ads_sheet_name:
-                # Load sheet as pure string/raw layout
-                df_ads_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name)
+                # Load Ads sheet cleanly from scratch without any assumed headers
+                df_ads_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name, header=None)
                 
-                # Check headers
+                # Dynamic row index picker
                 header_row_idx = 0
                 for i in range(min(15, df_ads_raw.shape[0])):
                     row_vals = [str(x).lower().strip() for x in df_ads_raw.iloc[i].values]
-                    if any('settlement' in r or 'sum(' in r or 'value' in r for r in row_vals):
+                    if any('settlement' in r or 'value' in r or 'sum' in r for r in row_vals):
                         header_row_idx = i
                         break
                 
-                # Create structured copy with standard headers
+                # Reload structured view
                 df_ads_proc = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name, header=header_row_idx)
                 df_ads_proc.columns = [str(c).strip() for c in df_ads_proc.columns]
                 all_ads_cols = list(df_ads_proc.columns)
                 
-                # Auto-select target column
-                matched_target_col = next((c for c in all_ads_cols if 'sum(g' in c.lower() or 'settlement value' in c.lower()), all_ads_cols[0])
+                # Pre-match the target formula column string automatically
+                default_ads_idx = 0
+                for idx, c in enumerate(all_ads_cols):
+                    if "sum(g" in c.lower() or "settlement value" in c.lower() or "=" in c:
+                        default_ads_idx = idx
+                        break
                 
-                st.info(f"📈 **Ads Sheet Integration Configurations ('{ads_sheet_name}'):**")
-                ads_val_col = st.selectbox("Selected Ads Formula Column:", all_ads_cols, index=all_ads_cols.index(matched_target_col))
+                st.info(f"📈 **Ads Sheet Detection Interface ('{ads_sheet_name}'):**")
+                ads_val_col = st.selectbox("Select Ads Target Cost Column Manually:", all_ads_cols, index=default_ads_idx)
                 
                 if ads_val_col:
-                    # --- CORE BYPASS LOGIC: Check if header contains formula string like SUM(G:K) ---
-                    formula_match = re.search(r"SUM\(([A-Z]+):([A-Z]+)\)", ads_val_col, re.IGNORECASE)
+                    # Clean the raw string column entries completely
+                    raw_series = df_ads_proc[ads_val_col].astype(str)
+                    clean_vals = []
                     
-                    if formula_match:
-                        start_col, end_col = formula_match.group(1), formula_match.group(2)
-                        st.write(f"⚙️ Formula string detected! Extracting raw values directly from column **{start_col}** to **{end_col}**...")
-                        
-                        # Reload sheet without header shifts to preserve strict alphabetical layout columns
-                        df_ads_raw_clean = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name, header=None)
-                        
-                        start_idx = col_to_idx(start_col)
-                        end_idx = col_to_idx(end_col)
-                        
-                        sub_pool = 0.0
-                        # Sum up columns within specified boundary dynamically
-                        for c_idx in range(start_idx, end_idx + 1):
-                            if c_idx < df_ads_raw_clean.shape[1]:
-                                s_series = df_ads_raw_clean[c_idx].astype(str).str.replace('₹', '', regex=False)
-                                s_series = s_series.str.replace(',', '', regex=False).str.replace(' ', '', regex=False).str.strip()
-                                numeric_series = pd.to_numeric(s_series, errors='coerce').fillna(0)
-                                sub_pool += numeric_series.abs().sum()
-                        
-                        total_ads_cost_pool = float(sub_pool)
-                    else:
-                        # Fallback simple series calculation if formula text is missing
-                        s_ads = df_ads_proc[ads_val_col].astype(str).str.replace('₹', '', regex=False)
-                        s_ads = s_ads.str.replace(',', '', regex=False).str.replace(' ', '', regex=False).str.strip()
-                        numeric_ads = pd.to_numeric(s_ads, errors='coerce').fillna(0)
-                        total_ads_cost_pool = float(numeric_ads.abs().sum())
+                    for val in raw_series:
+                        # Skip strings that contain Excel formula identifiers
+                        if "=" in val or "sum(" in val.lower():
+                            continue
+                        # Strip currency formatting symbols
+                        v_clean = val.replace('₹', '').replace(',', '').replace(' ', '').strip()
+                        if v_clean:
+                            clean_vals.append(v_clean)
+                            
+                    # Convert to raw numeric pool
+                    numeric_ads = pd.to_numeric(pd.Series(clean_vals), errors='coerce').fillna(0)
+                    total_ads_cost_pool = float(numeric_ads.abs().sum())
                     
-                    st.success(f"✅ Real-Time Ads Amount Parsed: **₹ {total_ads_cost_pool:,.2f}**")
+                    st.success(f"✅ Ironclad Parsed Ads Amount: **₹ {total_ads_cost_pool:,.2f}**")
             else:
                 st.warning("⚠️ No sheet containing name 'Ads' or 'ad' found.")
 
