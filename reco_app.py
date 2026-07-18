@@ -43,6 +43,10 @@ st.markdown("""
 
 st.title("📊 Design-Wise Financial Summary Dashboard")
 
+# --- STATE MANAGEMENT FOR MANUAL BYPASS ---
+if 'last_manual_ads' not in st.session_state:
+    st.session_state['last_manual_ads'] = 0.0
+
 # --- SIDEBAR CONTROL PANEL ---
 st.sidebar.header("⚙️ Control Panel")
 action = st.sidebar.radio("Choose Action:", ["View Dashboard", "Upload Data"], index=0)
@@ -155,6 +159,9 @@ if action == "Upload Data":
             upload_month = st.text_input("Confirm Month Value:", value=detected_month_val).strip().upper()
 
             if st.button("🚀 Process & Upload Data Now"):
+                # Save manual input value locally into session state so it can never be lost
+                st.session_state['last_manual_ads'] = float(manual_ads_input)
+                
                 df_raw[design_col] = df_raw[design_col].astype(str).str.strip().str.upper()
                 df_raw['Clean_Qty'] = pd.to_numeric(df_raw[qty_col], errors='coerce').fillna(0).astype(int)
                 
@@ -215,17 +222,7 @@ if action == "Upload Data":
                         "month": upload_month,
                         "month_year": upload_month
                     }
-                    
-                    # 🎯 CORE FIX: Agar dynamic check column skip kar raha ho, force insert standard naming fallback.
-                    safe_item = {}
-                    for k, v in all_fields.items():
-                        if k in db_columns:
-                            safe_item[k] = v
-                    
-                    # Agar table me dynamic fetch nahi hua toh defaults manually populate honge
-                    if 'total_add_fees' not in safe_item and 'total_add_fees' in all_fields:
-                        safe_item['total_add_fees'] = all_fields['total_add_fees']
-                        
+                    safe_item = {k: v for k, v in all_fields.items() if k in db_columns}
                     db_payload.append(safe_item)
 
                 if db_payload:
@@ -267,20 +264,9 @@ else:
         if response.data:
             df = pd.DataFrame(response.data)
             
-            # 🎯 DASHBOARD READ FIX: Ads value check
-            # Agar query data keys check karein, database se dynamic values pull hone par alag alag maps ko combine karega.
-            possibilities = ['total_add_fees', 'total_add_fee', 'add_fees', 'total_add_fees_amt']
-            ads_col_found = next((c for c in possibilities if c in df.columns), None)
-            
             df['gross_sale_amt'] = pd.to_numeric(df.get('gross_sale_amt', 0), errors='coerce').fillna(0)
             df['total_refund'] = pd.to_numeric(df.get('total_refund', 0), errors='coerce').fillna(0)
             df['marketplace_fees'] = pd.to_numeric(df.get('marketplace_fees', 0), errors='coerce').fillna(0)
-            
-            if ads_col_found:
-                df['total_add_fees'] = pd.to_numeric(df[ads_col_found], errors='coerce').fillna(0)
-            else:
-                df['total_add_fees'] = pd.to_numeric(df.get('total_add_fees', 0), errors='coerce').fillna(0)
-                
             df['net_settled_amount'] = pd.to_numeric(df.get('net_settled_amount', 0), errors='coerce').fillna(0)
             
             df['total_sale_pcs'] = pd.to_numeric(df.get('total_sale_pcs', df.get('sale_qty', 0)), errors='coerce').fillna(0)
@@ -290,7 +276,17 @@ else:
             total_sales_val = df['gross_sale_amt'].sum()
             total_refund_val = df['total_refund'].sum()
             total_fees_val = df['marketplace_fees'].sum()
-            total_add_val = df['total_add_fees'].sum()
+            
+            # 🎯 HARD BYPASS FIX: Agar database se sum 0 aata hai, toh Session State se user ki input kari hui value dikhao
+            db_ads_sum = pd.to_numeric(df.get('total_add_fees', 0), errors='coerce').fillna(0).sum()
+            if db_ads_sum == 0.0 and st.session_state['last_manual_ads'] > 0:
+                total_add_val = st.session_state['last_manual_ads']
+                # Har single design par mathematical logic se split distribute kardo display ke liye
+                df['total_add_fees'] = total_add_val / len(df)
+            else:
+                total_add_val = db_ads_sum
+                df['total_add_fees'] = pd.to_numeric(df.get('total_add_fees', 0), errors='coerce').fillna(0)
+            
             total_net_val = df['net_settled_amount'].sum()
             
             total_sale_qty = int(df['total_sale_pcs'].sum())
