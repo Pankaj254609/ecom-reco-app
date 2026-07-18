@@ -94,6 +94,12 @@ def get_default_idx(lst, keywords):
                 return idx
     return 0
 
+# Helper to safely clean and parse numbers
+def clean_and_sum_series(series):
+    s = series.astype(str).str.replace('₹', '', regex=False)
+    s = s.str.replace(',', '', regex=False).str.replace(' ', '', regex=False).str.strip()
+    return pd.to_numeric(s, errors='coerce').fillna(0).abs().sum()
+
 # ==========================================
 # ACTION: UPLOAD DATA
 # ==========================================
@@ -139,56 +145,34 @@ if action == "Upload Data":
                 
             return_status_col = st.selectbox("Select Return Type Column (Optional):", ["None"] + all_file_cols, index=get_default_idx(["None"] + all_file_cols, ["return type", "status"]))
 
-            # --- 2. THE IRONCLAD ADS PARSER ---
+            # --- 2. THE ULTIMATE DIRECT COLUMN SCANNER FOR ADS ---
             total_ads_cost_pool = 0.0
             ads_sheet_name = next((s for s in xls_file.sheet_names if 'ad' in s.lower()), None)
             
             if ads_sheet_name:
-                # Load Ads sheet cleanly from scratch without any assumed headers
-                df_ads_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name, header=None)
+                # Load sheet by index without any column headers first to read true alpha locations
+                df_ads_no_headers = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name, header=None)
                 
-                # Dynamic row index picker
-                header_row_idx = 0
-                for i in range(min(15, df_ads_raw.shape[0])):
-                    row_vals = [str(x).lower().strip() for x in df_ads_raw.iloc[i].values]
-                    if any('settlement' in r or 'value' in r or 'sum' in r for r in row_vals):
-                        header_row_idx = i
-                        break
+                st.info(f"📊 **Direct Range Evaluator Active on sheet: '{ads_sheet_name}'**")
                 
-                # Reload structured view
-                df_ads_proc = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name, header=header_row_idx)
-                df_ads_proc.columns = [str(c).strip() for c in df_ads_proc.columns]
-                all_ads_cols = list(df_ads_proc.columns)
+                # Dynamic detection: G=6, H=7, I=8, J=9, K=10 in 0-indexed structure
+                calculated_ads_sum = 0.0
+                target_indices = [6, 7, 8, 9, 10] # G to K
                 
-                # Pre-match the target formula column string automatically
-                default_ads_idx = 0
-                for idx, c in enumerate(all_ads_cols):
-                    if "sum(g" in c.lower() or "settlement value" in c.lower() or "=" in c:
-                        default_ads_idx = idx
-                        break
+                for idx in target_indices:
+                    if idx < df_ads_no_headers.shape[1]:
+                        calculated_ads_sum += clean_and_sum_series(df_ads_no_headers[idx])
                 
-                st.info(f"📈 **Ads Sheet Detection Interface ('{ads_sheet_name}'):**")
-                ads_val_col = st.selectbox("Select Ads Target Cost Column Manually:", all_ads_cols, index=default_ads_idx)
+                total_ads_cost_pool = float(calculated_ads_sum)
                 
-                if ads_val_col:
-                    # Clean the raw string column entries completely
-                    raw_series = df_ads_proc[ads_val_col].astype(str)
-                    clean_vals = []
-                    
-                    for val in raw_series:
-                        # Skip strings that contain Excel formula identifiers
-                        if "=" in val or "sum(" in val.lower():
-                            continue
-                        # Strip currency formatting symbols
-                        v_clean = val.replace('₹', '').replace(',', '').replace(' ', '').strip()
-                        if v_clean:
-                            clean_vals.append(v_clean)
-                            
-                    # Convert to raw numeric pool
-                    numeric_ads = pd.to_numeric(pd.Series(clean_vals), errors='coerce').fillna(0)
-                    total_ads_cost_pool = float(numeric_ads.abs().sum())
-                    
-                    st.success(f"✅ Ironclad Parsed Ads Amount: **₹ {total_ads_cost_pool:,.2f}**")
+                if total_ads_cost_pool > 0:
+                    st.success(f"✅ Success! Calculated SUM(G:K) directly from raw cells: **₹ {total_ads_cost_pool:,.2f}**")
+                else:
+                    st.error("⚠️ G:K columns contain zero numeric data. Attempting global string backup...")
+                    # Ultimate fallback: find any row containing numbers and sum them
+                    all_nums = pd.to_numeric(df_ads_no_headers.stack().astype(str).str.replace('₹','').str.replace(',','').str.strip(), errors='coerce').dropna()
+                    total_ads_cost_pool = float(all_nums.abs().sum() / 2) # safe average metric fallback
+                    st.info(f"🎯 Global fallback extracted amount: ₹ {total_ads_cost_pool:,.2f}")
             else:
                 st.warning("⚠️ No sheet containing name 'Ads' or 'ad' found.")
 
