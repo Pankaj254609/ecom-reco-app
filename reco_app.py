@@ -69,29 +69,28 @@ has_month = "month" in db_columns
 # Global Filters Data Load (Dynamically updated based on DB)
 available_brands, available_marketplaces, available_months = [], [], []
 try:
-    select_fields = "brand, marketplace"
-    if has_month_year:
-        select_fields += ", month_year"
-    elif has_month:
-        select_fields += ", month"
-        
-    meta_query = supabase.table("design_wise_summary").select(select_fields).execute()
+    # Saara select query clean karke execute kar rahe hain taaki naye brands turant fetch hon
+    meta_query = supabase.table("design_wise_summary").select("brand, marketplace, month, month_year").execute()
     if meta_query.data:
         meta_df = pd.DataFrame(meta_query.data)
+        
         if 'brand' in meta_df.columns:
-            available_brands = sorted(meta_df['brand'].dropna().unique())
+            # Dropna aur string formatting lagayi hai taaki proper unique list bane
+            available_brands = sorted([str(x).strip().upper() for x in meta_df['brand'].dropna().unique() if str(x).strip() != ''])
         if 'marketplace' in meta_df.columns:
-            available_marketplaces = sorted(meta_df['marketplace'].dropna().unique())
-        if 'month_year' in meta_df.columns:
-            available_months = sorted(meta_df['month_year'].dropna().unique())
+            available_marketplaces = sorted([str(x).strip().upper() for x in meta_df['marketplace'].dropna().unique() if str(x).strip() != ''])
+            
+        if 'month_year' in meta_df.columns and not meta_df['month_year'].dropna().empty:
+            available_months = sorted([str(x).strip().upper() for x in meta_df['month_year'].dropna().unique() if str(x).strip() != ''])
         elif 'month' in meta_df.columns:
-            available_months = sorted(meta_df['month'].dropna().unique())
-except Exception:
+            available_months = sorted([str(x).strip().upper() for x in meta_df['month'].dropna().unique() if str(x).strip() != ''])
+except Exception as e:
     pass
 
+# Dropdown rendering with live values
 selected_brand = st.sidebar.selectbox("Filter Brand:", ["ALL"] + available_brands, index=0)
 selected_mp = st.sidebar.selectbox("Filter Marketplace:", ["ALL"] + available_marketplaces, index=0)
-selected_month = st.sidebar.selectbox("Filter Month:", ["ALL"] + available_months, index=0) if (has_month_year or has_month) else "ALL"
+selected_month = st.sidebar.selectbox("Filter Month:", ["ALL"] + available_months, index=0)
 
 def get_default_idx(lst, keywords):
     for kw in keywords:
@@ -106,7 +105,7 @@ def get_default_idx(lst, keywords):
 if action == "Upload Data":
     st.header("📤 Upload & Process Financial Report")
     
-    upload_brand = st.text_input("Enter Brand Name:", "VIDA LOCA").strip().upper()
+    upload_brand = st.text_input("Enter Brand Name (Naya brand yahan type karein):", "VIDA LOCA").strip().upper()
     upload_mp = st.selectbox("Select Marketplace:", ["FLIPKART", "AMAZON", "MEESHO", "MYNTRA"])
     
     # MANUAL INPUT BOX
@@ -161,7 +160,6 @@ if action == "Upload Data":
             upload_month = st.text_input("Confirm Month Value:", value=detected_month_val).strip().upper()
 
             if st.button("🚀 Process & Upload Data Now"):
-                # Unique state key combination mapping for dynamic distinct brands fallback
                 state_key = f"{upload_brand}_{upload_mp}_{upload_month}"
                 st.session_state['last_manual_ads_dict'][state_key] = float(manual_ads_input)
                 
@@ -229,8 +227,7 @@ if action == "Upload Data":
                     db_payload.append(safe_item)
 
                 if db_payload:
-                    # 🎯 CORE FIX: Delete filters par ab .eq("brand", upload_brand) lagaya hai,
-                    # taaki ek brand doosre brand ke data ko kabhi erase na kar paye.
+                    # Specific brand cleanup logic taaki purane/doosre brands ka data secure rahe
                     try:
                         supabase.table("design_wise_summary").delete().eq("marketplace", upload_mp).eq("brand", upload_brand).eq("month", upload_month).execute()
                     except Exception:
@@ -241,8 +238,10 @@ if action == "Upload Data":
                         pass
                     
                     supabase.table("design_wise_summary").insert(db_payload).execute()
-                    st.success(f"🎉 Success! Data for Brand '{upload_brand}' Saved to Database securely!")
+                    st.success(f"🎉 Success! Brand '{upload_brand}' ka data add ho gaya hai!")
                     st.balloons()
+                    
+                    # Force app layout refresh to reload latest brand lists into sidebar
                     st.rerun()
                 else:
                     st.error("Processing generated empty data framework.")
@@ -283,10 +282,8 @@ else:
             total_refund_val = df['total_refund'].sum()
             total_fees_val = df['marketplace_fees'].sum()
             
-            # Smart allocation system based on selected clusters config 
             db_ads_sum = pd.to_numeric(df.get('total_add_fees', 0), errors='coerce').fillna(0).sum()
             
-            # Dynamic key matching parsing to retain session bypass elements if any brand needs dynamic calculation
             if db_ads_sum == 0.0:
                 total_add_val = 0.0
                 for br in df['brand'].unique():
