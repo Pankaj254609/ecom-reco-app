@@ -139,33 +139,37 @@ if action == "Upload Data":
                 
             return_status_col = st.selectbox("Select Return Type Column (Optional):", ["None"] + all_file_cols, index=get_default_idx(["None"] + all_file_cols, ["return type", "status"]))
 
-            # --- 2. READ ADS SHEET (SMART BLANK/NO-SKU MODE) ---
+            # --- 2. READ ADS SHEET (FOOLPROOF SCANNER) ---
             total_ads_cost_pool = 0.0
             ads_sheet_name = next((s for s in xls_file.sheet_names if 'ad' in s.lower()), None)
             
             if ads_sheet_name:
-                df_ads_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name)
+                # Load sheet without setting header initially to prevent row skipping issues
+                df_ads_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name, header=None)
                 
-                # Header fix for Ads Sheet
-                for i in range(min(10, df_ads_raw.shape[0])):
-                    row_vals_ads = [str(x).lower().strip() for x in df_ads_raw.iloc[i].values]
-                    if 'settlement' in row_vals_ads or 'neft' in row_vals_ads or 'ad' in row_vals_ads:
-                        df_ads_raw.columns = df_ads_raw.iloc[i]
-                        df_ads_raw = df_ads_raw[i+1:].reset_index(drop=True)
+                # Dynamic header finder: scan top 20 rows to locate 'settlement value'
+                header_row_idx = 0
+                for idx in range(min(20, len(df_ads_raw))):
+                    row_items = [str(x).lower().strip() for x in df_ads_raw.iloc[idx].values]
+                    if any('settlement value' in item or 'neft' in item for item in row_items):
+                        header_row_idx = idx
                         break
                 
-                df_ads_raw.columns = [str(c).strip() for c in df_ads_raw.columns]
+                # Re-assign columns based on found header row
+                df_ads_raw.columns = [str(c).strip() for c in df_ads_raw.iloc[header_row_idx]]
+                df_ads_raw = df_ads_raw.iloc[header_row_idx + 1:].reset_index(drop=True)
                 all_ads_cols = list(df_ads_raw.columns)
                 
                 st.info(f"📈 **Please match the Cost Column for Ads Sheet ('{ads_sheet_name}'):**")
-                # Look for Settlement Value column like in the screenshot
-                ads_val_col = st.selectbox("Select Ads Cost / Settlement Value Column:", all_ads_cols, index=get_default_idx(all_ads_cols, ["settlement value", "ad cost", "cost", "amount", "value"]))
+                ads_val_col = st.selectbox("Select Ads Cost / Settlement Value Column:", all_ads_cols, index=get_default_idx(all_ads_cols, ["settlement value", "ad cost", "cost", "amount"]))
                 
-                if ads_val_col:
-                    s_ads = df_ads_raw[ads_val_col].astype(str).str.replace('₹', '').str.replace(',', '').str.replace(' ', '').str.strip()
-                    # Flipkart reports negative settlement value for deductions (ads cost), converting to absolute positive cost pool
-                    total_ads_cost_pool = pd.to_numeric(s_ads, errors='coerce').fillna(0).abs().sum()
-                    st.success(f"✅ Parsed Total Ads Cost from sheet: **₹ {total_ads_cost_pool:,.2f}**")
+                if ads_val_col in df_ads_raw.columns:
+                    s_ads = df_ads_raw[ads_val_col].astype(str).str.replace('₹', '', regex=False).str.replace(',', '', regex=False).str.strip()
+                    # Calculate total ad cost (converting negative settlement to absolute numbers)
+                    total_ads_cost_pool = pd.to_numeric(s_ads, errors='coerce').dropna().abs().sum()
+                    st.success(f"✅ Extracted Total Ads Amount: **₹ {total_ads_cost_pool:,.2f}**")
+                else:
+                    st.error("Could not locate the selected column in the dynamic dataframe structure.")
             else:
                 st.warning("⚠️ No 'Ads' sheet detected.")
 
@@ -197,7 +201,7 @@ if action == "Upload Data":
                     df_raw['Customer_Return'] = 0
 
                 def clean_numeric_series(col_n):
-                    s = df_raw[col_n].astype(str).str.replace('₹', '').str.replace(',', '').str.replace(' ', '').str.strip()
+                    s = df_raw[col_n].astype(str).str.replace('₹', '', regex=False).str.replace(',', '', regex=False).str.strip()
                     return pd.to_numeric(s, errors='coerce').fillna(0)
 
                 df_raw['Gross_Sale_Clean'] = clean_numeric_series(gross_sale_col)
