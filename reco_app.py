@@ -103,6 +103,9 @@ if action == "Upload Data":
     upload_brand = st.text_input("Enter Brand Name:", "VIDA LOCA").strip().upper()
     upload_mp = st.selectbox("Select Marketplace:", ["FLIPKART", "AMAZON", "MEESHO", "MYNTRA"])
     
+    # 🎯 MANUAL INPUT BOX FOR ADS COST (Full Proof Solution)
+    manual_ads_input = st.number_input("💵 Enter Total Ads Cost Manually (from your Excel sheet):", min_value=0.0, value=0.0, step=500.0)
+    
     uploaded_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
     
     if uploaded_file is not None:
@@ -110,7 +113,7 @@ if action == "Upload Data":
             file_bytes = uploaded_file.read()
             xls_file = pd.ExcelFile(io.BytesIO(file_bytes))
             
-            # --- 1. READ ORDERS SHEET ---
+            # --- READ ORDERS SHEET ---
             orders_sheet = 'Orders' if 'Orders' in xls_file.sheet_names else xls_file.sheet_names[0]
             df_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=orders_sheet)
             
@@ -138,49 +141,6 @@ if action == "Upload Data":
                 qty_col = st.selectbox("Select Quantity Column:", all_file_cols, index=get_default_idx(all_file_cols, ["quantity", "qty"]))
                 
             return_status_col = st.selectbox("Select Return Type Column (Optional):", ["None"] + all_file_cols, index=get_default_idx(["None"] + all_file_cols, ["return type", "status"]))
-
-            # --- 2. UNIVERSAL BRUTE-FORCE SCANNER FOR ADS ---
-            total_ads_cost_pool = 0.0
-            ads_sheet_name = next((s for s in xls_file.sheet_names if 'ad' in s.lower()), None)
-            
-            if ads_sheet_name:
-                # Load the entire sheet completely raw
-                df_ads_dump = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name, header=None)
-                
-                st.info(f"🔍 **Deep Scanning Ads Sheet: '{ads_sheet_name}'...**")
-                
-                valid_numbers = []
-                
-                # Global element-by-element text stripping loop
-                for val in df_ads_dump.values.flatten():
-                    val_str = str(val).strip().lower()
-                    
-                    # Ignore formula rows or headers containing strings entirely
-                    if not val_str or "sum(" in val_str or "=" in val_str or "settlement" in val_str:
-                        continue
-                        
-                    # Strip symbols out completely
-                    clean_str = val_str.replace('₹', '').replace(',', '').replace(' ', '').strip()
-                    
-                    try:
-                        num_val = float(clean_str)
-                        # Hum sirf un numbers ko pakdenge jo zero nahi hain aur significant hain
-                        if num_val != 0.0:
-                            valid_numbers.append(abs(num_val))
-                    except ValueError:
-                        pass
-                
-                # Rule: Agar list me numbers hain, toh highest number ya sum check karein
-                if valid_numbers:
-                    # Excel summary sheet me settlement value usually sabse badi numeric value hoti hai ya totals ka sum
-                    # Agar multi-row data hai toh sum lenge, agar pre-calculated summary single cell hai toh max number target hoga
-                    total_ads_cost_pool = max(valid_numbers)
-                    
-                    st.success(f"✅ Universal Scanner Parsed Ads Amount: **₹ {total_ads_cost_pool:,.2f}**")
-                else:
-                    st.error("⚠️ Sheet ke andar koi bhi valid number nahi mila.")
-            else:
-                st.warning("⚠️ No sheet containing name 'Ads' or 'ad' found.")
 
             date_col = next((c for c in all_file_cols if 'date' in c.lower() or 'time' in c.lower()), None)
             detected_month_val = "UNKNOWN"
@@ -231,8 +191,8 @@ if action == "Upload Data":
                 summary_df.columns = ['design', 'Gross_Sale', 'Refund', 'Fees', 'Net_Settled', 'Sales_Pcs', 'Log_Pcs', 'Cust_Pcs']
 
                 unique_designs_count = len(summary_df)
-                if unique_designs_count > 0 and total_ads_cost_pool > 0:
-                    summary_df['Ads_Cost'] = total_ads_cost_pool / unique_designs_count
+                if unique_designs_count > 0 and manual_ads_input > 0:
+                    summary_df['Ads_Cost'] = manual_ads_input / unique_designs_count
                 else:
                     summary_df['Ads_Cost'] = 0.0
 
@@ -270,7 +230,7 @@ if action == "Upload Data":
                         pass
                     
                     supabase.table("design_wise_summary").insert(db_payload).execute()
-                    st.success(f"🎉 Success! Uploaded {len(db_payload)} rows. Total Ads Fee of ₹ {total_ads_cost_pool:,.2f} is now saved into database!")
+                    st.success(f"🎉 Success! Uploaded {len(db_payload)} rows. Total Manual Ads Fee of ₹ {manual_ads_input:,.2f} has been perfectly processed into database!")
                     st.balloons()
                 else:
                     st.error("Processing generated empty data framework.")
