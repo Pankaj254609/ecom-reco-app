@@ -43,9 +43,9 @@ st.markdown("""
 
 st.title("📊 Design-Wise Financial Summary Dashboard")
 
-# --- STATE MANAGEMENT FOR MANUAL BYPASS ---
-if 'last_manual_ads' not in st.session_state:
-    st.session_state['last_manual_ads'] = 0.0
+# --- STATE MANAGEMENT FOR MULTI-BRAND MANUAL BYPASS ---
+if 'last_manual_ads_dict' not in st.session_state:
+    st.session_state['last_manual_ads_dict'] = {}
 
 # --- SIDEBAR CONTROL PANEL ---
 st.sidebar.header("⚙️ Control Panel")
@@ -66,7 +66,7 @@ if not db_columns:
 has_month_year = "month_year" in db_columns
 has_month = "month" in db_columns
 
-# Global Filters Data Load
+# Global Filters Data Load (Dynamically updated based on DB)
 available_brands, available_marketplaces, available_months = [], [], []
 try:
     select_fields = "brand, marketplace"
@@ -78,12 +78,14 @@ try:
     meta_query = supabase.table("design_wise_summary").select(select_fields).execute()
     if meta_query.data:
         meta_df = pd.DataFrame(meta_query.data)
-        available_brands = sorted(meta_df['brand'].unique()) if 'brand' in meta_df.columns else []
-        available_marketplaces = sorted(meta_df['marketplace'].unique()) if 'marketplace' in meta_df.columns else []
+        if 'brand' in meta_df.columns:
+            available_brands = sorted(meta_df['brand'].dropna().unique())
+        if 'marketplace' in meta_df.columns:
+            available_marketplaces = sorted(meta_df['marketplace'].dropna().unique())
         if 'month_year' in meta_df.columns:
-            available_months = sorted(meta_df['month_year'].unique())
+            available_months = sorted(meta_df['month_year'].dropna().unique())
         elif 'month' in meta_df.columns:
-            available_months = sorted(meta_df['month'].unique())
+            available_months = sorted(meta_df['month'].dropna().unique())
 except Exception:
     pass
 
@@ -159,8 +161,9 @@ if action == "Upload Data":
             upload_month = st.text_input("Confirm Month Value:", value=detected_month_val).strip().upper()
 
             if st.button("🚀 Process & Upload Data Now"):
-                # Save manual input value locally into session state so it can never be lost
-                st.session_state['last_manual_ads'] = float(manual_ads_input)
+                # Unique state key combination mapping for dynamic distinct brands fallback
+                state_key = f"{upload_brand}_{upload_mp}_{upload_month}"
+                st.session_state['last_manual_ads_dict'][state_key] = float(manual_ads_input)
                 
                 df_raw[design_col] = df_raw[design_col].astype(str).str.strip().str.upper()
                 df_raw['Clean_Qty'] = pd.to_numeric(df_raw[qty_col], errors='coerce').fillna(0).astype(int)
@@ -226,6 +229,8 @@ if action == "Upload Data":
                     db_payload.append(safe_item)
 
                 if db_payload:
+                    # 🎯 CORE FIX: Delete filters par ab .eq("brand", upload_brand) lagaya hai,
+                    # taaki ek brand doosre brand ke data ko kabhi erase na kar paye.
                     try:
                         supabase.table("design_wise_summary").delete().eq("marketplace", upload_mp).eq("brand", upload_brand).eq("month", upload_month).execute()
                     except Exception:
@@ -236,8 +241,9 @@ if action == "Upload Data":
                         pass
                     
                     supabase.table("design_wise_summary").insert(db_payload).execute()
-                    st.success(f"🎉 Success! Data Processed & Saved to Database!")
+                    st.success(f"🎉 Success! Data for Brand '{upload_brand}' Saved to Database securely!")
                     st.balloons()
+                    st.rerun()
                 else:
                     st.error("Processing generated empty data framework.")
         except Exception as e:
@@ -277,15 +283,20 @@ else:
             total_refund_val = df['total_refund'].sum()
             total_fees_val = df['marketplace_fees'].sum()
             
-            # 🎯 HARD BYPASS FIX: Agar database se sum 0 aata hai, toh Session State se user ki input kari hui value dikhao
+            # Smart allocation system based on selected clusters config 
             db_ads_sum = pd.to_numeric(df.get('total_add_fees', 0), errors='coerce').fillna(0).sum()
-            if db_ads_sum == 0.0 and st.session_state['last_manual_ads'] > 0:
-                total_add_val = st.session_state['last_manual_ads']
-                # Har single design par mathematical logic se split distribute kardo display ke liye
-                df['total_add_fees'] = total_add_val / len(df)
+            
+            # Dynamic key matching parsing to retain session bypass elements if any brand needs dynamic calculation
+            if db_ads_sum == 0.0:
+                total_add_val = 0.0
+                for br in df['brand'].unique():
+                    for mp in df['marketplace'].unique():
+                        for mn in df.get('month', df.get('month_year', pd.Series(['UNKNOWN']))).unique():
+                            s_key = f"{br}_{mp}_{mn}"
+                            if s_key in st.session_state['last_manual_ads_dict']:
+                                total_add_val += st.session_state['last_manual_ads_dict'][s_key]
             else:
                 total_add_val = db_ads_sum
-                df['total_add_fees'] = pd.to_numeric(df.get('total_add_fees', 0), errors='coerce').fillna(0)
             
             total_net_val = df['net_settled_amount'].sum()
             
@@ -324,7 +335,7 @@ else:
             st.plotly_chart(fig, use_container_width=True)
 
             st.subheader("📋 Design-Wise Detailed Breakdown")
-            display_df = df.groupby('design').agg({'total_sale_pcs': 'sum', 'logistics_return_pcs': 'sum', 'customer_return_pcs': 'sum', 'gross_sale_amt': 'sum', 'total_refund': 'sum', 'marketplace_fees': 'sum', 'total_add_fees': 'sum', 'net_settled_amount': 'sum'}).reset_index()
+            display_df = df.groupby(['brand', 'marketplace', 'design']).agg({'total_sale_pcs': 'sum', 'logistics_return_pcs': 'sum', 'customer_return_pcs': 'sum', 'gross_sale_amt': 'sum', 'total_refund': 'sum', 'marketplace_fees': 'sum', 'total_add_fees': 'sum', 'net_settled_amount': 'sum'}).reset_index()
             formatted_df = display_df.copy()
             for col in ['gross_sale_amt', 'total_refund', 'marketplace_fees', 'total_add_fees', 'net_settled_amount']:
                 formatted_df[col] = formatted_df[col].apply(lambda x: f"₹ {x:,.2f}")
