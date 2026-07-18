@@ -139,39 +139,40 @@ if action == "Upload Data":
                 
             return_status_col = st.selectbox("Select Return Type Column (Optional):", ["None"] + all_file_cols, index=get_default_idx(["None"] + all_file_cols, ["return type", "status"]))
 
-            # --- 2. BRUTE FORCE READ FOR ADS SHEET ---
+            # --- 2. EXPLICIT MAPPING FOR ADS SHEET ---
             total_ads_cost_pool = 0.0
             ads_sheet_name = next((s for s in xls_file.sheet_names if 'ad' in s.lower()), None)
             
             if ads_sheet_name:
-                # Load flat sheet without column constraints
-                df_ads_brute = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name, header=None)
+                # Load sheet directly
+                df_ads_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name)
                 
-                # Scan cells to locate the text column index for settlement value
-                found_col_idx = None
-                for r_idx in range(min(15, len(df_ads_brute))):
-                    for c_idx in range(df_ads_brute.shape[1]):
-                        cell_val = str(df_ads_brute.iloc[r_idx, c_idx]).lower()
-                        if 'settlement value' in cell_val:
-                            found_col_idx = c_idx
-                            break
-                    if found_col_idx is not None:
+                # Dynamic row header finder
+                for i in range(min(15, df_ads_raw.shape[0])):
+                    row_vals = [str(x).lower().strip() for x in df_ads_raw.iloc[i].values]
+                    if any('settlement' in r or 'neft' in r or 'value' in r for r in row_vals):
+                        df_ads_raw.columns = df_ads_raw.iloc[i]
+                        df_ads_raw = df_ads_raw[i+1:].reset_index(drop=True)
                         break
                 
-                # Fallback if text mismatch: check column count structure
-                if found_col_idx is None and df_ads_brute.shape[1] >= 3:
-                    found_col_idx = df_ads_brute.shape[1] - 1 # target last column typically
+                df_ads_raw.columns = [str(c).strip() for c in df_ads_raw.columns]
+                all_ads_cols = list(df_ads_raw.columns)
                 
-                if found_col_idx is not None:
-                    # Target specific series, clean text characters out, sum up absolute numbers
-                    raw_series = df_ads_brute[found_col_idx].astype(str)
-                    clean_series = raw_series.str.replace('₹', '', regex=False).str.replace(',', '', regex=False).str.strip()
-                    numeric_series = pd.to_numeric(clean_series, errors='coerce').dropna()
-                    total_ads_cost_pool = numeric_series.abs().sum()
+                st.info(f"📈 **Please match the Cost Column for Ads Sheet ('{ads_sheet_name}'):**")
+                # Dropdown for explicitly choosing the Ads settlement column
+                ads_val_col = st.selectbox(
+                    "Select Ads Cost / Settlement Value Column:", 
+                    all_ads_cols, 
+                    index=get_default_idx(all_ads_cols, ["settlement value", "ad cost", "cost", "value", "sum(g:k)"])
+                )
+                
+                if ads_val_col:
+                    # Clean text symbols like ₹, spaces, or commas, handle both negative/positive values safely
+                    s_ads = df_ads_raw[ads_val_col].astype(str).str.replace('₹', '', regex=False).str.replace(',', '', regex=False).str.replace(' ', '', regex=False).str.strip()
+                    numeric_ads = pd.to_numeric(s_ads, errors='coerce').fillna(0)
+                    total_ads_cost_pool = float(numeric_ads.abs().sum())
                     
-                    st.metric(label="✅ Live Detected Ads Pool (From Excel)", value=f"₹ {total_ads_cost_pool:,.2f}")
-                else:
-                    st.error("Could not find the Settlement/Ads Value column anywhere in the sheet.")
+                    st.success(f"✅ Real-Time Ads Amount Parsed: **₹ {total_ads_cost_pool:,.2f}**")
             else:
                 st.warning("⚠️ No sheet containing name 'Ads' or 'ad' found.")
 
@@ -254,7 +255,6 @@ if action == "Upload Data":
                     db_payload.append(safe_item)
 
                 if db_payload:
-                    # FORCE DELETE PREVIOUS ENTRIES TO CLEAR OLD DUMP
                     try:
                         supabase.table("design_wise_summary").delete().eq("marketplace", upload_mp).eq("brand", upload_brand).eq("month", upload_month).execute()
                     except Exception:
