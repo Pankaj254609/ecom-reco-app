@@ -94,12 +94,6 @@ def get_default_idx(lst, keywords):
                 return idx
     return 0
 
-# Helper to safely clean and parse numbers
-def clean_and_sum_series(series):
-    s = series.astype(str).str.replace('₹', '', regex=False)
-    s = s.str.replace(',', '', regex=False).str.replace(' ', '', regex=False).str.strip()
-    return pd.to_numeric(s, errors='coerce').fillna(0).abs().sum()
-
 # ==========================================
 # ACTION: UPLOAD DATA
 # ==========================================
@@ -145,34 +139,46 @@ if action == "Upload Data":
                 
             return_status_col = st.selectbox("Select Return Type Column (Optional):", ["None"] + all_file_cols, index=get_default_idx(["None"] + all_file_cols, ["return type", "status"]))
 
-            # --- 2. THE ULTIMATE DIRECT COLUMN SCANNER FOR ADS ---
+            # --- 2. UNIVERSAL BRUTE-FORCE SCANNER FOR ADS ---
             total_ads_cost_pool = 0.0
             ads_sheet_name = next((s for s in xls_file.sheet_names if 'ad' in s.lower()), None)
             
             if ads_sheet_name:
-                # Load sheet by index without any column headers first to read true alpha locations
-                df_ads_no_headers = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name, header=None)
+                # Load the entire sheet completely raw
+                df_ads_dump = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name, header=None)
                 
-                st.info(f"📊 **Direct Range Evaluator Active on sheet: '{ads_sheet_name}'**")
+                st.info(f"🔍 **Deep Scanning Ads Sheet: '{ads_sheet_name}'...**")
                 
-                # Dynamic detection: G=6, H=7, I=8, J=9, K=10 in 0-indexed structure
-                calculated_ads_sum = 0.0
-                target_indices = [6, 7, 8, 9, 10] # G to K
+                valid_numbers = []
                 
-                for idx in target_indices:
-                    if idx < df_ads_no_headers.shape[1]:
-                        calculated_ads_sum += clean_and_sum_series(df_ads_no_headers[idx])
+                # Global element-by-element text stripping loop
+                for val in df_ads_dump.values.flatten():
+                    val_str = str(val).strip().lower()
+                    
+                    # Ignore formula rows or headers containing strings entirely
+                    if not val_str or "sum(" in val_str or "=" in val_str or "settlement" in val_str:
+                        continue
+                        
+                    # Strip symbols out completely
+                    clean_str = val_str.replace('₹', '').replace(',', '').replace(' ', '').strip()
+                    
+                    try:
+                        num_val = float(clean_str)
+                        # Hum sirf un numbers ko pakdenge jo zero nahi hain aur significant hain
+                        if num_val != 0.0:
+                            valid_numbers.append(abs(num_val))
+                    except ValueError:
+                        pass
                 
-                total_ads_cost_pool = float(calculated_ads_sum)
-                
-                if total_ads_cost_pool > 0:
-                    st.success(f"✅ Success! Calculated SUM(G:K) directly from raw cells: **₹ {total_ads_cost_pool:,.2f}**")
+                # Rule: Agar list me numbers hain, toh highest number ya sum check karein
+                if valid_numbers:
+                    # Excel summary sheet me settlement value usually sabse badi numeric value hoti hai ya totals ka sum
+                    # Agar multi-row data hai toh sum lenge, agar pre-calculated summary single cell hai toh max number target hoga
+                    total_ads_cost_pool = max(valid_numbers)
+                    
+                    st.success(f"✅ Universal Scanner Parsed Ads Amount: **₹ {total_ads_cost_pool:,.2f}**")
                 else:
-                    st.error("⚠️ G:K columns contain zero numeric data. Attempting global string backup...")
-                    # Ultimate fallback: find any row containing numbers and sum them
-                    all_nums = pd.to_numeric(df_ads_no_headers.stack().astype(str).str.replace('₹','').str.replace(',','').str.strip(), errors='coerce').dropna()
-                    total_ads_cost_pool = float(all_nums.abs().sum() / 2) # safe average metric fallback
-                    st.info(f"🎯 Global fallback extracted amount: ₹ {total_ads_cost_pool:,.2f}")
+                    st.error("⚠️ Sheet ke andar koi bhi valid number nahi mila.")
             else:
                 st.warning("⚠️ No sheet containing name 'Ads' or 'ad' found.")
 
