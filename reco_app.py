@@ -139,39 +139,41 @@ if action == "Upload Data":
                 
             return_status_col = st.selectbox("Select Return Type Column (Optional):", ["None"] + all_file_cols, index=get_default_idx(["None"] + all_file_cols, ["return type", "status"]))
 
-            # --- 2. READ ADS SHEET (FOOLPROOF SCANNER) ---
+            # --- 2. BRUTE FORCE READ FOR ADS SHEET ---
             total_ads_cost_pool = 0.0
             ads_sheet_name = next((s for s in xls_file.sheet_names if 'ad' in s.lower()), None)
             
             if ads_sheet_name:
-                # Load sheet without setting header initially to prevent row skipping issues
-                df_ads_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name, header=None)
+                # Load flat sheet without column constraints
+                df_ads_brute = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ads_sheet_name, header=None)
                 
-                # Dynamic header finder: scan top 20 rows to locate 'settlement value'
-                header_row_idx = 0
-                for idx in range(min(20, len(df_ads_raw))):
-                    row_items = [str(x).lower().strip() for x in df_ads_raw.iloc[idx].values]
-                    if any('settlement value' in item or 'neft' in item for item in row_items):
-                        header_row_idx = idx
+                # Scan cells to locate the text column index for settlement value
+                found_col_idx = None
+                for r_idx in range(min(15, len(df_ads_brute))):
+                    for c_idx in range(df_ads_brute.shape[1]):
+                        cell_val = str(df_ads_brute.iloc[r_idx, c_idx]).lower()
+                        if 'settlement value' in cell_val:
+                            found_col_idx = c_idx
+                            break
+                    if found_col_idx is not None:
                         break
                 
-                # Re-assign columns based on found header row
-                df_ads_raw.columns = [str(c).strip() for c in df_ads_raw.iloc[header_row_idx]]
-                df_ads_raw = df_ads_raw.iloc[header_row_idx + 1:].reset_index(drop=True)
-                all_ads_cols = list(df_ads_raw.columns)
+                # Fallback if text mismatch: check column count structure
+                if found_col_idx is None and df_ads_brute.shape[1] >= 3:
+                    found_col_idx = df_ads_brute.shape[1] - 1 # target last column typically
                 
-                st.info(f"📈 **Please match the Cost Column for Ads Sheet ('{ads_sheet_name}'):**")
-                ads_val_col = st.selectbox("Select Ads Cost / Settlement Value Column:", all_ads_cols, index=get_default_idx(all_ads_cols, ["settlement value", "ad cost", "cost", "amount"]))
-                
-                if ads_val_col in df_ads_raw.columns:
-                    s_ads = df_ads_raw[ads_val_col].astype(str).str.replace('₹', '', regex=False).str.replace(',', '', regex=False).str.strip()
-                    # Calculate total ad cost (converting negative settlement to absolute numbers)
-                    total_ads_cost_pool = pd.to_numeric(s_ads, errors='coerce').dropna().abs().sum()
-                    st.success(f"✅ Extracted Total Ads Amount: **₹ {total_ads_cost_pool:,.2f}**")
+                if found_col_idx is not None:
+                    # Target specific series, clean text characters out, sum up absolute numbers
+                    raw_series = df_ads_brute[found_col_idx].astype(str)
+                    clean_series = raw_series.str.replace('₹', '', regex=False).str.replace(',', '', regex=False).str.strip()
+                    numeric_series = pd.to_numeric(clean_series, errors='coerce').dropna()
+                    total_ads_cost_pool = numeric_series.abs().sum()
+                    
+                    st.metric(label="✅ Live Detected Ads Pool (From Excel)", value=f"₹ {total_ads_cost_pool:,.2f}")
                 else:
-                    st.error("Could not locate the selected column in the dynamic dataframe structure.")
+                    st.error("Could not find the Settlement/Ads Value column anywhere in the sheet.")
             else:
-                st.warning("⚠️ No 'Ads' sheet detected.")
+                st.warning("⚠️ No sheet containing name 'Ads' or 'ad' found.")
 
             date_col = next((c for c in all_file_cols if 'date' in c.lower() or 'time' in c.lower()), None)
             detected_month_val = "UNKNOWN"
@@ -252,18 +254,18 @@ if action == "Upload Data":
                     db_payload.append(safe_item)
 
                 if db_payload:
+                    # FORCE DELETE PREVIOUS ENTRIES TO CLEAR OLD DUMP
                     try:
-                        del_q = supabase.table("design_wise_summary").delete().eq("marketplace", upload_mp).eq("brand", upload_brand)
-                        if has_month:
-                            del_q = del_q.eq("month", upload_month)
-                        elif has_month_year:
-                            del_q = del_q.eq("month_year", upload_month)
-                        del_q.execute()
+                        supabase.table("design_wise_summary").delete().eq("marketplace", upload_mp).eq("brand", upload_brand).eq("month", upload_month).execute()
+                    except Exception:
+                        pass
+                    try:
+                        supabase.table("design_wise_summary").delete().eq("marketplace", upload_mp).eq("brand", upload_brand).eq("month_year", upload_month).execute()
                     except Exception:
                         pass
                     
                     supabase.table("design_wise_summary").insert(db_payload).execute()
-                    st.success(f"🎉 Success! Uploaded {len(db_payload)} rows. Total Ads Fee Pool of ₹ {total_ads_cost_pool:,.2f} has been accounted for!")
+                    st.success(f"🎉 Success! Uploaded {len(db_payload)} rows. Total Ads Fee of ₹ {total_ads_cost_pool:,.2f} is now saved into database!")
                     st.balloons()
                 else:
                     st.error("Processing generated empty data framework.")
