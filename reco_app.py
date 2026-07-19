@@ -66,16 +66,31 @@ if not db_columns:
 has_month_year = "month_year" in db_columns
 has_month = "month" in db_columns
 
-# Global Filters Data Load (Dynamically updated based on DB)
+# ==========================================
+# FIX 1: Fetching all metadata (Bypass 1000 rows limit)
+# ==========================================
 available_brands, available_marketplaces, available_months = [], [], []
 try:
-    # Saara select query clean karke execute kar rahe hain taaki naye brands turant fetch hon
-    meta_query = supabase.table("design_wise_summary").select("brand, marketplace, month, month_year").execute()
-    if meta_query.data:
-        meta_df = pd.DataFrame(meta_query.data)
+    all_meta_data = []
+    start = 0
+    chunk_size = 1000
+    
+    # Loop tab tak chalega jab tak Supabase se saara data fetch na ho jaye
+    while True:
+        meta_query = supabase.table("design_wise_summary").select("brand, marketplace, month, month_year").range(start, start + chunk_size - 1).execute()
+        if not meta_query.data:
+            break
+            
+        all_meta_data.extend(meta_query.data)
+        
+        if len(meta_query.data) < chunk_size:
+            break
+        start += chunk_size
+        
+    if all_meta_data:
+        meta_df = pd.DataFrame(all_meta_data)
         
         if 'brand' in meta_df.columns:
-            # Dropna aur string formatting lagayi hai taaki proper unique list bane
             available_brands = sorted([str(x).strip().upper() for x in meta_df['brand'].dropna().unique() if str(x).strip() != ''])
         if 'marketplace' in meta_df.columns:
             available_marketplaces = sorted([str(x).strip().upper() for x in meta_df['marketplace'].dropna().unique() if str(x).strip() != ''])
@@ -227,7 +242,6 @@ if action == "Upload Data":
                     db_payload.append(safe_item)
 
                 if db_payload:
-                    # Specific brand cleanup logic taaki purane/doosre brands ka data secure rahe
                     try:
                         supabase.table("design_wise_summary").delete().eq("marketplace", upload_mp).eq("brand", upload_brand).eq("month", upload_month).execute()
                     except Exception:
@@ -237,11 +251,13 @@ if action == "Upload Data":
                     except Exception:
                         pass
                     
-                    supabase.table("design_wise_summary").insert(db_payload).execute()
+                    # FIX 2: Bulk Insert me chunking lagai taaki Supabase pe overload na ho
+                    chunk_size_insert = 500
+                    for k in range(0, len(db_payload), chunk_size_insert):
+                        supabase.table("design_wise_summary").insert(db_payload[k : k + chunk_size_insert]).execute()
+                        
                     st.success(f"🎉 Success! Brand '{upload_brand}' ka data add ho gaya hai!")
                     st.balloons()
-                    
-                    # Force app layout refresh to reload latest brand lists into sidebar
                     st.rerun()
                 else:
                     st.error("Processing generated empty data framework.")
@@ -253,21 +269,36 @@ if action == "Upload Data":
 # ==========================================
 else:
     try:
-        query = supabase.table("design_wise_summary").select("*")
-        if selected_brand != "ALL":
-            query = query.eq("brand", selected_brand)
-        if selected_mp != "ALL":
-            query = query.eq("marketplace", selected_mp)
-        if selected_month != "ALL":
-            if has_month:
-                query = query.eq("month", selected_month)
-            elif has_month_year:
-                query = query.eq("month_year", selected_month)
-            
-        response = query.execute()
+        # FIX 3: Dashboard data fetch ko bhi pagination ke through pass kiya gaya hai (1000 rows bypass karne ke liye)
+        all_dashboard_data = []
+        start = 0
+        chunk_size = 1000
         
-        if response.data:
-            df = pd.DataFrame(response.data)
+        while True:
+            query = supabase.table("design_wise_summary").select("*")
+            if selected_brand != "ALL":
+                query = query.eq("brand", selected_brand)
+            if selected_mp != "ALL":
+                query = query.eq("marketplace", selected_mp)
+            if selected_month != "ALL":
+                if has_month:
+                    query = query.eq("month", selected_month)
+                elif has_month_year:
+                    query = query.eq("month_year", selected_month)
+                
+            response = query.range(start, start + chunk_size - 1).execute()
+            
+            if not response.data:
+                break
+                
+            all_dashboard_data.extend(response.data)
+            
+            if len(response.data) < chunk_size:
+                break
+            start += chunk_size
+        
+        if all_dashboard_data:
+            df = pd.DataFrame(all_dashboard_data)
             
             df['gross_sale_amt'] = pd.to_numeric(df.get('gross_sale_amt', 0), errors='coerce').fillna(0)
             df['total_refund'] = pd.to_numeric(df.get('total_refund', 0), errors='coerce').fillna(0)
