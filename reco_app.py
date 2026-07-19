@@ -66,16 +66,13 @@ if not db_columns:
 has_month_year = "month_year" in db_columns
 has_month = "month" in db_columns
 
-# ==========================================
-# FIX 1: Fetching all metadata (Bypass 1000 rows limit)
-# ==========================================
+# Fetching all metadata (Bypass 1000 rows limit)
 available_brands, available_marketplaces, available_months = [], [], []
 try:
     all_meta_data = []
     start = 0
     chunk_size = 1000
     
-    # Loop tab tak chalega jab tak Supabase se saara data fetch na ho jaye
     while True:
         meta_query = supabase.table("design_wise_summary").select("brand, marketplace, month, month_year").range(start, start + chunk_size - 1).execute()
         if not meta_query.data:
@@ -102,7 +99,6 @@ try:
 except Exception as e:
     pass
 
-# Dropdown rendering with live values
 selected_brand = st.sidebar.selectbox("Filter Brand:", ["ALL"] + available_brands, index=0)
 selected_mp = st.sidebar.selectbox("Filter Marketplace:", ["ALL"] + available_marketplaces, index=0)
 selected_month = st.sidebar.selectbox("Filter Month:", ["ALL"] + available_months, index=0)
@@ -120,13 +116,15 @@ def get_default_idx(lst, keywords):
 if action == "Upload Data":
     st.header("📤 Upload & Process Financial Report")
     
-    upload_brand = st.text_input("Enter Brand Name (Naya brand yahan type karein):", "VIDA LOCA").strip().upper()
+    upload_brand = st.text_input("Enter Brand Name:", "VIDA LOCA").strip().upper()
     upload_mp = st.selectbox("Select Marketplace:", ["FLIPKART", "AMAZON", "MEESHO", "MYNTRA"])
     
-    # MANUAL INPUT BOX
-    manual_ads_input = st.number_input("💵 Enter Total Ads Cost Manually (from your Excel sheet):", min_value=0.0, value=0.0, step=500.0)
+    manual_ads_input = st.number_input("💵 Enter Total Ads Cost Manually:", min_value=0.0, value=0.0, step=500.0)
     
-    uploaded_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
+    uploaded_file = st.file_uploader("1️⃣ Upload Payment Excel File (.xlsx)", type=["xlsx"])
+    
+    # NAYA MAPPING FILE UPLOADER YAHAN HAI
+    mapping_file = st.file_uploader("2️⃣ Upload 'CHANEL MAPING SKU' Excel (Design convert karne ke liye)", type=["xlsx", "csv"])
     
     if uploaded_file is not None:
         try:
@@ -150,7 +148,8 @@ if action == "Upload Data":
             st.warning("🎯 **Please match the Columns for 'Orders' Sheet:**")
             col_sel1, col_sel2 = st.columns(2)
             with col_sel1:
-                design_col = st.selectbox("Select SKU / Design Column (Orders):", all_file_cols, index=get_default_idx(all_file_cols, ["seller sku", "sku", "design"]))
+                # Yahan aap apna column BG (Seller SKU) select karenge
+                design_col = st.selectbox("Select Seller SKU Column (For Mapping):", all_file_cols, index=get_default_idx(all_file_cols, ["seller sku", "sku", "design"]))
                 gross_sale_col = st.selectbox("Select Gross Sales Column:", all_file_cols, index=get_default_idx(all_file_cols, ["sale amount total", "gross sales", "sale amount"]))
                 refund_col = st.selectbox("Select Total Refund Column:", all_file_cols, index=get_default_idx(all_file_cols, ["refund"]))
             
@@ -179,6 +178,35 @@ if action == "Upload Data":
                 st.session_state['last_manual_ads_dict'][state_key] = float(manual_ads_input)
                 
                 df_raw[design_col] = df_raw[design_col].astype(str).str.strip().str.upper()
+                
+                # --- NAYI MAPPING LOGIC YAHAN HAI ---
+                grouping_col = design_col
+                if mapping_file is not None:
+                    try:
+                        if mapping_file.name.endswith('.csv'):
+                            df_map = pd.read_csv(mapping_file)
+                        else:
+                            df_map = pd.read_excel(mapping_file)
+                            
+                        # Extracting specific columns based on CHANEL MAPING SKU sheet
+                        sku_col_name = "Seller SKU on Channel"
+                        design_col_name = "DESIGN"
+                        
+                        if sku_col_name in df_map.columns and design_col_name in df_map.columns:
+                            # Creating dictionary
+                            mapping_dict = dict(zip(df_map[sku_col_name].astype(str).str.strip().str.upper(), 
+                                                    df_map[design_col_name].astype(str).str.strip().str.upper()))
+                            
+                            # Applying the mapping (Agar SKU nahi mila, toh old SKU hi rakhega)
+                            df_raw['Mapped_Design'] = df_raw[design_col].map(mapping_dict).fillna(df_raw[design_col])
+                            grouping_col = 'Mapped_Design'
+                            st.success(f"✅ 'Seller SKU' mapped successfully with 'DESIGN' from {mapping_file.name}!")
+                        else:
+                            st.warning("⚠️ 'Seller SKU on Channel' ya 'DESIGN' column mapping sheet mein nahi mila. Original SKUs use kar rahe hain.")
+                    except Exception as e:
+                        st.error(f"Error mapping file read karne mein: {e}")
+                # ------------------------------------
+
                 df_raw['Clean_Qty'] = pd.to_numeric(df_raw[qty_col], errors='coerce').fillna(0).astype(int)
                 
                 if return_status_col != "None":
@@ -200,7 +228,8 @@ if action == "Upload Data":
                 df_raw['Fees_Clean'] = clean_numeric_series(mp_fees_col)
                 df_raw['Net_Settled_Clean'] = clean_numeric_series(net_settled_col)
 
-                summary_df = df_raw.groupby(design_col).agg({
+                # Yahan `grouping_col` (Mapped Design) use kiya hai aggregation ke liye
+                summary_df = df_raw.groupby(grouping_col).agg({
                     'Gross_Sale_Clean': 'sum',
                     'Refund_Clean': 'sum',
                     'Fees_Clean': 'sum',
@@ -251,12 +280,11 @@ if action == "Upload Data":
                     except Exception:
                         pass
                     
-                    # FIX 2: Bulk Insert me chunking lagai taaki Supabase pe overload na ho
                     chunk_size_insert = 500
                     for k in range(0, len(db_payload), chunk_size_insert):
                         supabase.table("design_wise_summary").insert(db_payload[k : k + chunk_size_insert]).execute()
                         
-                    st.success(f"🎉 Success! Brand '{upload_brand}' ka data add ho gaya hai!")
+                    st.success(f"🎉 Success! Data Design-wise convert hoke '{upload_brand}' ke liye add ho gaya hai!")
                     st.balloons()
                     st.rerun()
                 else:
@@ -269,7 +297,6 @@ if action == "Upload Data":
 # ==========================================
 else:
     try:
-        # FIX 3: Dashboard data fetch ko bhi pagination ke through pass kiya gaya hai (1000 rows bypass karne ke liye)
         all_dashboard_data = []
         start = 0
         chunk_size = 1000
