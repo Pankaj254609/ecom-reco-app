@@ -1,1 +1,7 @@
+streamlit
+pandas
+supabase
+xlsxwriter
 python-barcode
+qrcode
+pillow
