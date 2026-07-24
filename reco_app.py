@@ -84,6 +84,11 @@ def clean_sku(val):
   return s
 
 
+def sanitize_dataframe_for_json(df):
+  """Converts NaN/NaT values to None so they can be JSON serialized for Supabase."""
+  return df.astype(object).where(pd.notnull(df), None)
+
+
 # --- HIGH RESOLUTION BARCODE & QR GENERATOR ---
 def generate_barcode_img(text):
   code128 = barcode.get_barcode_class("code128")
@@ -618,6 +623,9 @@ elif menu == "📦 1. MASTER SKU Manager":
             if f_master.name.endswith(".csv")
             else pd.read_excel(f_master)
         )
+        # Sanitize NaN values for JSON compatibility
+        df_u = sanitize_dataframe_for_json(df_u)
+        
         supabase.table("master_sku").insert(
             df_u.to_dict(orient="records")
         ).execute()
@@ -663,6 +671,9 @@ elif menu == "🔗 2. CHANNEL SKU Mapping":
             if f_map.name.endswith(".csv")
             else pd.read_excel(f_map)
         )
+        # Sanitize NaN values for JSON compatibility
+        df_u = sanitize_dataframe_for_json(df_u)
+
         supabase.table("channel_sku_map").insert(
             df_u.to_dict(orient="records")
         ).execute()
@@ -739,6 +750,9 @@ elif menu == "📥 3. ADD INVENTORY (Stock Inward)":
             if f_inv.name.endswith(".csv")
             else pd.read_excel(f_inv)
         )
+        # Sanitize NaN values for JSON compatibility
+        df_u = sanitize_dataframe_for_json(df_u)
+
         supabase.table("add_inventory").insert(
             df_u.to_dict(orient="records")
         ).execute()
@@ -796,6 +810,9 @@ elif menu == "📤 4. SALES DATA Manifest":
             if f_sales.name.endswith(".csv")
             else pd.read_excel(f_sales)
         )
+        # Sanitize NaN values for JSON compatibility
+        df_u = sanitize_dataframe_for_json(df_u)
+
         supabase.table("sale_data").insert(
             df_u.to_dict(orient="records")
         ).execute()
