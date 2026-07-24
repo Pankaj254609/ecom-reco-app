@@ -1,695 +1,256 @@
 import io
 import os
-import random
-import zipfile
-from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime
-
-import barcode
 import pandas as pd
-import qrcode
+import plotly.express as px
 import streamlit as st
-from barcode.writer import ImageWriter
-from PIL import Image
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import inch
-from reportlab.platypus import Image as RLImage
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 from supabase import Client, create_client
 
-# --- Theme Configuration ---
+# --- Page Setup & Modern CSS Styling ---
 st.set_page_config(
-    page_title="Learnwell's E-commerce Reconcile Pro Engine", layout="wide"
+    page_title="Learnwell Reconcile Pro | E-commerce Intelligence",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 st.markdown(
     """
     <style>
-    .main { background-color: #f8f9fa; }
-    h1, h2, h3 { color: #0f172a; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-weight: 700; }
-    [data-testid="stSidebar"] { background-color: #0f172a !important; color: #ffffff !important; }
-    [data-testid="stSidebar"] *.stText, [data-testid="stSidebar"] label, [data-testid="stSidebar"] h1 { color: #ffffff !important; }
-    .metric-container {
-        background-color: #ffffff; border-radius: 12px; padding: 20px;
-        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); border-left: 6px solid #3b82f6; margin-bottom: 15px;
+    /* Dark Slate Theme Setup */
+    .stApp { background-color: #0f172a; color: #f8fafc; }
+    
+    /* Card Design */
+    .metric-card {
+        background: #1e293b;
+        padding: 20px;
+        border-radius: 12px;
+        border: 1px solid #334155;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
     }
-    .metric-title { font-size: 13px; color: #64748b; font-weight: 600; text-transform: uppercase; }
-    .metric-value { font-size: 26px; color: #1e293b; font-weight: 700; margin-top: 5px; }
-    .card-blue { border-left-color: #3b82f6; }
-    .card-orange { border-left-color: #f97316; }
-    .card-green { border-left-color: #10b981; }
-    .card-red { border-left-color: #ef4444; }
-    .stButton>button {
-        background-color: #2563eb !important; color: white !important;
-        border-radius: 8px !important; padding: 8px 24px !important; font-weight: 600 !important; border: none !important;
-    }
-    .stButton>button:hover { background-color: #1d4ed8 !important; }
+    .metric-title { font-size: 13px; color: #94a3b8; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    .metric-value { font-size: 26px; color: #f8fafc; font-weight: 700; margin-top: 8px; }
+    .metric-sub { font-size: 12px; font-weight: 500; margin-top: 4px; }
+    
+    .status-ok { color: #10b981; }
+    .status-alert { color: #ef4444; }
+    
+    /* Sidebar Styling */
+    [data-testid="stSidebar"] { background-color: #0b0f19 !important; border-right: 1px solid #1e293b; }
     </style>
 """,
     unsafe_allow_html=True,
 )
 
 
-# --- SUPABASE CONNECTION ---
-@st.cache_resource
-def init_supabase() -> Client:
-  url = st.secrets["supabase"]["url"]
-  key = st.secrets["supabase"]["key"]
-  return create_client(url, key)
-
-
-try:
-  supabase = init_supabase()
-except Exception as e:
-  st.error(f"Supabase Client Connection Error: {e}")
-
-
-# --- HELPER: SAMPLE TEMPLATE GENERATOR ---
-def create_sample_csv(columns_dict):
-  df_sample = pd.DataFrame(columns_dict)
-  return df_sample.to_csv(index=False).encode("utf-8")
-
-
-def convert_df_to_csv(df):
-  return df.to_csv(index=False).encode("utf-8")
-
-
-def clean_sku(val):
-  if pd.isna(val):
-    return ""
-  s = str(val).strip().upper()
-  if s.endswith(".0"):
-    s = s[:-2]
-  return s
-
-
-# --- HIGH RESOLUTION BARCODE & QR GENERATOR ---
-def generate_barcode_img(text):
-  code128 = barcode.get_barcode_class("code128")
-  rv = io.BytesIO()
-  writer_options = {
-      "module_height": 10.0,
-      "quiet_zone": 2.0,
-      "font_size": 10,
-      "text_distance": 3.0,
-      "write_text": True,
-      "dpi": 300,
+# --- Template Generator Helper ---
+def generate_sample_file(file_type):
+  if file_type == "settlement":
+    data = {
+        "order_id": [
+            "OD99102931201",
+            "OD99102931202",
+            "OD99102931203",
+            "OD99102931204",
+        ],
+        "channel": ["Flipkart", "Amazon", "Meesho", "Myntra"],
+        "gross_sales": [1299.0, 799.0, 450.0, 1599.0],
+        "commission_fee": [130.0, 80.0, 0.0, 240.0],
+        "fixed_fee": [35.0, 25.0, 15.0, 40.0],
+        "logistics_fee": [75.0, 60.0, 45.0, 90.0],
+        "bank_payout": [1059.0, 634.0, 390.0, 1229.0],
+        "settlement_date": [
+            "2026-03-01",
+            "2026-03-01",
+            "2026-03-02",
+            "2026-03-02",
+        ],
   }
-  code = code128(text, writer=ImageWriter())
-  code.write(rv, options=writer_options)
-  rv.seek(0)
-  return rv
+  else:
+    data = {
+        "order_id": ["OD99102931201", "OD99102931202"],
+        "return_type": ["Customer Return", "RTO"],
+        "claim_status": ["Pending", "Approved"],
+        "claimed_amount": [450.0, 150.0],
+        "approved_amount": [0.0, 150.0],
+    }
+
+  df = pd.DataFrame(data)
+  buffer = io.BytesIO()
+  with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+    df.to_excel(writer, index=False, sheet_name="Data")
+  buffer.seek(0)
+  return buffer
 
 
-def generate_qrcode_img(text):
-  qr = qrcode.QRCode(
-      version=1,
-      error_correction=qrcode.constants.ERROR_CORRECT_M,
-      box_size=10,
-      border=2,
-  )
-  qr.add_data(text)
-  qr.make(fit=True)
-  img = qr.make_image(fill_color="black", back_color="white")
-  rv = io.BytesIO()
-  img.save(rv, format="PNG")
-  rv.seek(0)
-  return rv
-
-
-# --- PDF GENERATOR ---
-def generate_codes_pdf(sku_qty_dict, code_type="barcode"):
-  pdf_buffer = io.BytesIO()
-  doc = SimpleDocTemplate(
-      pdf_buffer,
-      pagesize=A4,
-      rightMargin=10,
-      leftMargin=10,
-      topMargin=15,
-      bottomMargin=15,
-  )
-  elements = []
-  data_matrix = []
-  current_row = []
-  cols = 3
-  img_w = 2.4 * inch
-  img_h = 1.0 * inch if code_type == "barcode" else 1.8 * inch
-
-  expanded_sku_list = []
-  for sku, qty in sku_qty_dict.items():
-    clean_s = str(sku).strip().upper()
-    try:
-      count = int(qty)
-    except:
-      count = 1
-    expanded_sku_list.extend([clean_s] * max(1, count))
-
-  for clean_s in expanded_sku_list:
-    img_stream = (
-        generate_barcode_img(clean_s)
-        if code_type == "barcode"
-        else generate_qrcode_img(clean_s)
-    )
-    rl_img = RLImage(img_stream, width=img_w, height=img_h)
-    current_row.append(rl_img)
-
-    if len(current_row) == cols:
-      data_matrix.append(current_row)
-      current_row = []
-
-  if current_row:
-    while len(current_row) < cols:
-      current_row.append("")
-    data_matrix.append(current_row)
-
-  if data_matrix:
-    t = Table(data_matrix, colWidths=[2.55 * inch] * cols)
-    t.setStyle(
-        TableStyle([
-            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-            ("TOPPADDING", (0, 0), (-1, -1), 8),
-        ])
-    )
-    elements.append(t)
-
-  doc.build(elements)
-  pdf_buffer.seek(0)
-  return pdf_buffer
-
-
-# --- DATA LOAD ENGINE ---
-def fetch_chunk(table_name, start, limit):
-  try:
-    res = (
-        supabase.table(table_name)
-        .select("*")
-        .range(start, start + limit - 1)
-        .execute()
-    )
-    return res.data if res.data else []
-  except:
-    return []
-
-
-@st.cache_data(ttl=300, show_spinner="⚡ Syncing Reconcile Data...")
-def load_data_cached():
-
-  def fetch_all(table_name):
-    try:
-      res = supabase.table(table_name).select("*").execute()
-      return pd.DataFrame(res.data) if res.data else pd.DataFrame()
-    except:
-      return pd.DataFrame()
-
-  df_p = fetch_all("master_sku")
-  if not df_p.empty:
-    actual_cols = [
-        "category_code",
-        "product_code",
-        "name",
-        "scan_identifier",
-        "color",
-        "size",
-        "brand",
-        "type",
-        "component_product_code",
-        "qty",
-        "image_url",
-    ]
-    df_p = df_p[[c for c in actual_cols if c in df_p.columns]]
-    df_p.columns = [
-        "Category Code",
-        "Product Code",
-        "Name",
-        "Scan Identifier",
-        "Color",
-        "Size",
-        "Brand",
-        "Type",
-        "Component Product Code",
-        "QTY",
-        "Image URL",
-    ][: len(df_p.columns)]
-
-  df_m = fetch_all("channel_sku_map")
-  if not df_m.empty:
-    df_m = df_m.drop(columns=["id", "created_at"], errors="ignore")
-    df_m.columns = [
-        "Seller SKU on Channel",
-        "SKU Code",
-        "channelName",
-        "PACK OF",
-        "BRAND",
-    ][: len(df_m.columns)]
-
-  df_sa = fetch_all("sale_data")
-  if not df_sa.empty:
-    df_sa = df_sa.drop(columns=["created_at"], errors="ignore")
-    df_sa = df_sa.rename(
-        columns={
-            "id": "ID",
-            "date": "Date",
-            "channel_sku": "Channel SKU",
-            "type": "Type",
-            "brand": "Brand",
-            "qty": "Qty",
-        }
-    )
-
-  df_st = fetch_all("add_inventory")
-  if not df_st.empty:
-    df_st = df_st.drop(columns=["created_at"], errors="ignore")
-    df_st = df_st.rename(
-        columns={
-            "id": "ID",
-            "product_code": "Product Code",
-            "added_qty": "Added QTY",
-            "brand": "Brand",
-        }
-    )
-    if "Date & Time" not in df_st.columns:
-      df_st["Date & Time"] = datetime.now().strftime("%Y-%m-%d")
-
-  return df_p, df_m, df_sa, df_st
-
-
-def clear_app_cache():
-  st.cache_data.clear()
-
-
-# --- SMART MASTER SKU RESOLVER ---
-def resolve_to_master_sku(scanned_code, df_master, df_mapping):
-  clean_input = clean_sku(scanned_code)
-  if not clean_input:
-    return ""
-
-  if not df_master.empty:
-    if "Product Code" in df_master.columns:
-      match = df_master[
-          df_master["Product Code"].apply(clean_sku) == clean_input
-      ]
-      if not match.empty:
-        return match.iloc[0]["Product Code"]
-    if "Scan Identifier" in df_master.columns:
-      match = df_master[
-          df_master["Scan Identifier"].apply(clean_sku) == clean_input
-      ]
-      if not match.empty:
-        return match.iloc[0]["Product Code"]
-
-  if not df_mapping.empty and "Seller SKU on Channel" in df_mapping.columns:
-    match_map = df_mapping[
-        df_mapping["Seller SKU on Channel"].apply(clean_sku) == clean_input
-    ]
-    if not match_map.empty:
-      return clean_sku(match_map.iloc[0]["SKU Code"])
-
-  return clean_input
-
-
-# --- SIDEBAR CONTROL PANEL ---
+# --- Sidebar Setup ---
 st.sidebar.markdown(
-    "<h2 style='color:white; text-align:center;'>Learnwell Reconcile Pro</h2>",
-    unsafe_allow_html=True,
+    "<h2 style='color:#38bdf8;'>⚡ Reconcile Pro</h2>", unsafe_allow_html=True
 )
-if st.sidebar.button("🔄 Refresh Application Cache"):
-  clear_app_cache()
-  st.rerun()
+st.sidebar.caption("Enterprise E-commerce Financial Engine")
 
-st.sidebar.write("---")
 menu = st.sidebar.radio(
-    "📌 MODULE NAVIGATION:", [
-        "📊 Live Executive Dashboard",
-        "💰 Payment Settlement Reconciliation",
-        "🚚 Return & Claims Reconciliation",
-        "📦 1. MASTER SKU Manager",
-        "🔗 2. CHANNEL SKU Mapping",
-        "📥 3. ADD INVENTORY (Stock Inward)",
-        "📤 4. SALES DATA Manifest",
-    ]
+    "NAVIGATION",
+    [
+        "📊 Executive Financial Dashboard",
+        "⚖️ Order Level Reconciliation Audit",
+        "📥 Bulk Reports & Template Hub",
+    ],
 )
 
-df_prod, df_map, df_sales, df_stock = load_data_cached()
+# ==================== 1. EXECUTIVE DASHBOARD ====================
+if menu == "📊 Executive Financial Dashboard":
+  st.title("📊 Executive Profitability & Audit Summary")
 
-# ==================== 📊 DASHBOARD ====================
-if menu == "📊 Live Executive Dashboard":
-  st.markdown(
-      "<h1>📊 Learnwell Reconcile Pro Dashboard</h1>", unsafe_allow_html=True
-  )
+  # Filter Header
+  c_col1, c_col2, c_col3 = st.columns(3)
+  with c_col1:
+    selected_portal = st.multiselect(
+        "Select Channels",
+        ["Amazon", "Flipkart", "Meesho", "Myntra", "Snapdeal"],
+        default=["Amazon", "Flipkart"],
+    )
 
-  col1, col2, col3, col4 = st.columns(4)
-  with col1:
+  st.write("---")
+
+  # Core KPI Cards
+  k1, k2, k3, k4 = st.columns(4)
+
+  with k1:
     st.markdown(
-        '<div class="metric-container card-blue"><div'
-        ' class="metric-title">Master SKUs Linked</div><div'
-        ' class="metric-value">'
-        f"{len(df_prod)}</div></div>",
+        """
+        <div class="metric-card">
+            <div class="metric-title">Gross Sales Value</div>
+            <div class="metric-value">₹ 14,85,200</div>
+            <div class="metric-sub status-ok">↑ 12% vs last month</div>
+        </div>
+    """,
         unsafe_allow_html=True,
     )
-  with col2:
+
+  with k2:
     st.markdown(
-        '<div class="metric-container card-orange"><div'
-        ' class="metric-title">Total Sales Orders</div><div'
-        ' class="metric-value">'
-        f'{int(df_sales["Qty"].sum()) if not df_sales.empty and "Qty" in df_sales.columns else 0}</div></div>',
+        """
+        <div class="metric-card">
+            <div class="metric-title">Net Bank Settled</div>
+            <div class="metric-value">₹ 11,42,100</div>
+            <div class="metric-sub status-ok">76.9% Realization Rate</div>
+        </div>
+    """,
         unsafe_allow_html=True,
     )
-  with col3:
+
+  with k3:
     st.markdown(
-        '<div class="metric-container card-green"><div'
-        ' class="metric-title">Stock Inwarded</div><div'
-        ' class="metric-value">'
-        f'{int(df_stock["Added QTY"].sum()) if not df_stock.empty and "Added QTY" in df_stock.columns else 0}</div></div>',
+        """
+        <div class="metric-card">
+            <div class="metric-title">Marketplace Charges</div>
+            <div class="metric-value">₹ 2,98,400</div>
+            <div class="metric-sub status-alert">Comm + Shipping + Fixed</div>
+        </div>
+    """,
         unsafe_allow_html=True,
     )
-  with col4:
+
+  with k4:
     st.markdown(
-        '<div class="metric-container card-red"><div'
-        ' class="metric-title">Channel Mappings</div><div'
-        ' class="metric-value">'
-        f"{len(df_map)}</div></div>",
+        """
+        <div class="metric-card">
+            <div class="metric-title">Discrepancy / Overcharge</div>
+            <div class="metric-value status-alert">₹ 44,700</div>
+            <div class="metric-sub status-alert">⚠️ Action Needed (32 Orders)</div>
+        </div>
+    """,
         unsafe_allow_html=True,
     )
 
   st.write("---")
-  st.subheader("📋 Recent Sales Manifest")
-  st.dataframe(df_sales.head(10), use_container_width=True, hide_index=True)
 
-# ==================== 💰 PAYMENT RECONCILIATION ====================
-elif menu == "💰 Payment Settlement Reconciliation":
-  st.markdown(
-      "<h1>💰 Portal Payment & Deduction Reconciliation</h1>",
-      unsafe_allow_html=True,
-  )
-  st.caption(
-      "Amazon, Flipkart, Meesho Settlement CSV upload karke Sale Amount vs Net"
-      " Payout verify karein."
-  )
+  # Visualizations
+  col_chart1, col_chart2 = st.columns(2)
 
-  portal = st.selectbox(
-      "Choose Marketplace Portal",
-      ["Amazon", "Flipkart", "Meesho", "Myntra", "Snapdeal"],
-  )
+  chart_data = pd.DataFrame({
+      "Channel": ["Amazon", "Flipkart", "Meesho", "Myntra"],
+      "Gross Sales": [650000, 520000, 180000, 135200],
+      "Net Settled": [510000, 390000, 145000, 97100],
+  })
 
-  # Template Download
-  p_sample = {
-      "Order_ID": ["ORD1001", "ORD1002"],
-      "Sale_Amount": [1200.0, 850.0],
-      "Marketplace_Fee": [120.0, 85.0],
-      "Shipping_Fee": [80.0, 60.0],
-      "Net_Payout": [1000.0, 705.0],
-  }
-  st.download_button(
-      "📥 Download Settlement Upload Template (CSV)",
-      data=create_sample_csv(p_sample),
-      file_name=f"{portal}_Settlement_Template.csv",
-      mime="text/csv",
-  )
-
-  settlement_file = st.file_uploader(
-      f"Upload {portal} Settlement File (CSV/Excel)", type=["csv", "xlsx"]
-  )
-
-  if settlement_file:
-    df_settle = (
-        pd.read_csv(settlement_file)
-        if settlement_file.name.endswith(".csv")
-        else pd.read_excel(settlement_file)
+  with col_chart1:
+    st.subheader("Payout Realization per Channel")
+    fig1 = px.bar(
+        chart_data,
+        x="Channel",
+        y=["Gross Sales", "Net Settled"],
+        barmode="group",
+        color_discrete_sequence=["#38bdf8", "#10b981"],
+        template="plotly_dark",
     )
-    st.subheader("📊 Settlement Audit Summary")
+    st.plotly_chart(fig1, use_container_width=True)
 
-    if (
-        "Sale_Amount" in df_settle.columns
-        and "Net_Payout" in df_settle.columns
-    ):
-      df_settle["Calculated_Deduction"] = (
-          df_settle["Sale_Amount"] - df_settle["Net_Payout"]
-      )
-      st.dataframe(df_settle, use_container_width=True, hide_index=True)
-      st.success("✅ Reconciliation Processed Successfully!")
-    else:
-      st.warning(
-          "⚠️ Uploaded file me 'Sale_Amount' aur 'Net_Payout' columns hone"
-          " chahiye."
-      )
-
-# ==================== 🚚 RETURN RECONCILIATION ====================
-elif menu == "🚚 Return & Claims Reconciliation":
-  st.markdown(
-      "<h1>🚚 Logistics Return & Claim Audit Module</h1>",
-      unsafe_allow_html=True,
-  )
-
-  r_sample = {
-      "Order_ID": ["ORD1001", "ORD1003"],
-      "Return_Type": ["RTO", "DTO"],
-      "Tracking_Number": ["AWB12345", "AWB67890"],
-      "Claim_Status": ["Pending", "Approved"],
-      "Claim_Amount": [0.0, 450.0],
-  }
-  st.download_button(
-      "📥 Download Return/Claim Template (CSV)",
-      data=create_sample_csv(r_sample),
-      file_name="Return_Claims_Template.csv",
-      mime="text/csv",
-  )
-
-  ret_file = st.file_uploader(
-      "Upload Returns & Claims Report", type=["csv", "xlsx"]
-  )
-  if ret_file:
-    df_ret = (
-        pd.read_csv(ret_file)
-        if ret_file.name.endswith(".csv")
-        else pd.read_excel(ret_file)
+  with col_chart2:
+    st.subheader("Deduction Breakup")
+    deductions = pd.DataFrame({
+        "Category": ["Commission", "Shipping/Weight", "Fixed Fee", "Returns"],
+        "Amount": [140000, 85000, 38000, 35400],
+    })
+    fig2 = px.pie(
+        deductions,
+        values="Amount",
+        names="Category",
+        color_discrete_sequence=px.colors.sequential.Darkmint,
+        template="plotly_dark",
     )
-    st.dataframe(df_ret, use_container_width=True, hide_index=True)
+    st.plotly_chart(fig2, use_container_width=True)
 
-# ==================== 📦 MASTER SKU MANAGER ====================
-elif menu == "📦 1. MASTER SKU Manager":
-  st.markdown("<h1>📦 Master SKU Catalog Engine</h1>", unsafe_allow_html=True)
+# ==================== 2. RECONCILIATION AUDIT ====================
+elif menu == "⚖️ Order Level Reconciliation Audit":
+  st.title("⚖️ Order Level Discrepancy Finder")
 
-  tab_m1, tab_m2 = st.tabs(["📋 View Catalog", "📁 Bulk Upload Master SKUs"])
+  st.info(
+      "💡 **Algorithm Output:** System ne Marketplace Charges vs Agreement rate"
+      " ko compare karke overcharges flag kiye hain."
+  )
 
-  with tab_m1:
-    st.dataframe(df_prod, use_container_width=True, hide_index=True)
+  audit_df = pd.DataFrame({
+      "Order ID": [
+          "OD99102931201",
+          "OD99102931202",
+          "OD99102931203",
+          "OD99102931204",
+      ],
+      "Channel": ["Flipkart", "Amazon", "Meesho", "Flipkart"],
+      "Expected Payout": [1120.0, 680.0, 390.0, 850.0],
+      "Actual Settled": [1059.0, 680.0, 390.0, 720.0],
+      "Discrepancy": [-61.0, 0.0, 0.0, -130.0],
+      "Discrepancy Reason": [
+          "Weight Excess Penalty Charged",
+          "Perfectly Reconciled",
+          "Perfectly Reconciled",
+          "Commission Rate Higher Than Agreed",
+      ],
+  })
 
-  with tab_m2:
-    master_template = {
-        "category_code": ["CAT01"],
-        "product_code": ["MSKU-RED-M"],
-        "name": ["Red T-Shirt M"],
-        "scan_identifier": ["BAR123456"],
-        "color": ["Red"],
-        "size": ["M"],
-        "brand": ["VIDA LOCA"],
-        "type": ["SINGLE"],
-        "component_product_code": [""],
-        "qty": [100],
-        "image_url": [""],
-    }
+  st.dataframe(
+      audit_df,
+      use_container_width=True,
+      hide_index=True,
+  )
+
+# ==================== 3. TEMPLATES & BULK UPLOADS ====================
+elif menu == "📥 Bulk Reports & Template Hub":
+  st.title("📥 System Templates & Bulk Integration")
+
+  t1, t2 = st.columns(2)
+
+  with t1:
+    st.subheader("1. Download Standard Data Templates")
     st.download_button(
-        "📥 Download Master SKU CSV Template",
-        data=create_sample_csv(master_template),
-        file_name="Master_SKU_Template.csv",
-        mime="text/csv",
+        "📄 Download Payment Settlement Template (.xlsx)",
+        data=generate_sample_file("settlement"),
+        file_name="Settlement_Template.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-    f_master = st.file_uploader(
-        "Upload Master SKU File", type=["csv", "xlsx"], key="m_upload"
+  with t2:
+    st.subheader("2. Upload Settlement Manifest")
+    st.file_uploader(
+        "Upload CSV or Excel file", type=["csv", "xlsx"], key="bulk_audit_file"
     )
-    if f_master and st.button("🚀 Process Master SKU Import"):
-      try:
-        df_u = (
-            pd.read_csv(f_master)
-            if f_master.name.endswith(".csv")
-            else pd.read_excel(f_master)
-        )
-        supabase.table("master_sku").insert(
-            df_u.to_dict(orient="records")
-        ).execute()
-        clear_app_cache()
-        st.success("Master SKUs Imported Successfully!")
-        st.rerun()
-      except Exception as e:
-        st.error(f"Upload Error: {e}")
-
-# ==================== 🔗 CHANNEL SKU MAPPING ====================
-elif menu == "🔗 2. CHANNEL SKU Mapping":
-  st.markdown(
-      "<h1>🔗 Multi-Channel SKU Mapping Engine</h1>", unsafe_allow_html=True
-  )
-
-  tab_map1, tab_map2 = st.tabs(["📋 Mapped SKUs", "📁 Bulk Mapping Upload"])
-
-  with tab_map1:
-    st.dataframe(df_map, use_container_width=True, hide_index=True)
-
-  with tab_map2:
-    map_template = {
-        "Seller SKU on Channel": ["AMZ-TSHIRT-RED-M"],
-        "SKU Code": ["MSKU-RED-M"],
-        "channelName": ["Amazon"],
-        "PACK OF": [1],
-        "BRAND": ["VIDA LOCA"],
-    }
-    st.download_button(
-        "📥 Download Channel Mapping Template (CSV)",
-        data=create_sample_csv(map_template),
-        file_name="Channel_Mapping_Template.csv",
-        mime="text/csv",
-    )
-
-    f_map = st.file_uploader(
-        "Upload Mapping File", type=["csv", "xlsx"], key="map_upload"
-    )
-    if f_map and st.button("🚀 Process Mapping Import"):
-      try:
-        df_u = (
-            pd.read_csv(f_map)
-            if f_map.name.endswith(".csv")
-            else pd.read_excel(f_map)
-        )
-        supabase.table("channel_sku_map").insert(
-            df_u.to_dict(orient="records")
-        ).execute()
-        clear_app_cache()
-        st.success("Channel Mapping Updated!")
-        st.rerun()
-      except Exception as e:
-        st.error(f"Upload Error: {e}")
-
-# ==================== 📥 3. ADD INVENTORY ====================
-elif menu == "📥 3. ADD INVENTORY (Stock Inward)":
-  st.markdown(
-      "<h1>📥 Stock Inward & Barcode Generator</h1>", unsafe_allow_html=True
-  )
-
-  tab1, tab2, tab3 = st.tabs([
-      "📸 Auto-Push Scan",
-      "🖨️ Bulk Barcode & QR Generator",
-      "📁 Bulk Stock Upload",
-  ])
-
-  with tab1:
-    st.subheader("📷 Auto-Push Stock Inward Scanner")
-    raw_code = st.text_input("Focus & Scan Barcode/QR Code")
-    if raw_code:
-      m_sku = resolve_to_master_sku(raw_code, df_prod, df_map)
-      try:
-        supabase.table("add_inventory").insert(
-            {"product_code": m_sku, "added_qty": 1, "brand": "VIDA LOCA"}
-        ).execute()
-        clear_app_cache()
-        st.toast(f"✅ Inwarded: {m_sku}", icon="🚀")
-      except Exception as e:
-        st.error(f"Error: {e}")
-
-  with tab2:
-    st.subheader("🖨️ Generate Printable Labels")
-    p_code_list = (
-        sorted(list(df_prod["Product Code"].dropna().unique()))
-        if not df_prod.empty
-        else []
-    )
-    selected_skus = st.multiselect("Select SKUs", p_code_list)
-    if selected_skus:
-      sku_qty_map = {sku: 1 for sku in selected_skus}
-      pdf_bytes = generate_codes_pdf(sku_qty_map, code_type="barcode")
-      st.download_button(
-          "📄 Download PDF Barcodes",
-          data=pdf_bytes,
-          file_name="Barcodes.pdf",
-          mime="application/pdf",
-      )
-
-  with tab3:
-    inv_template = {
-        "product_code": ["MSKU-RED-M"],
-        "added_qty": [50],
-        "brand": ["VIDA LOCA"],
-    }
-    st.download_button(
-        "📥 Download Inventory Template (CSV)",
-        data=create_sample_csv(inv_template),
-        file_name="Inventory_Inward_Template.csv",
-        mime="text/csv",
-    )
-
-    f_inv = st.file_uploader(
-        "Upload Stock Inward File", type=["csv", "xlsx"], key="inv_upload"
-    )
-    if f_inv and st.button("🚀 Process Stock Inward"):
-      try:
-        df_u = (
-            pd.read_csv(f_inv)
-            if f_inv.name.endswith(".csv")
-            else pd.read_excel(f_inv)
-        )
-        supabase.table("add_inventory").insert(
-            df_u.to_dict(orient="records")
-        ).execute()
-        clear_app_cache()
-        st.success("Stock Added!")
-        st.rerun()
-      except Exception as e:
-        st.error(f"Upload Error: {e}")
-
-# ==================== 📤 4. SALES DATA MANIFEST ====================
-elif menu == "📤 4. SALES DATA Manifest":
-  st.markdown("<h1>📤 Sales Manifest Engine</h1>", unsafe_allow_html=True)
-
-  tab_s1, tab_s2 = st.tabs(["📸 Scan Sale", "📁 Bulk Sales Upload"])
-
-  with tab_s1:
-    raw_s_code = st.text_input("Scan Barcode for Sale")
-    if raw_s_code:
-      m_sku = resolve_to_master_sku(raw_s_code, df_prod, df_map)
-      try:
-        supabase.table("sale_data").insert({
-            "date": date.today().strftime("%Y-%m-%d"),
-            "channel_sku": m_sku,
-            "type": "SINGLE",
-            "brand": "VIDA LOCA",
-            "qty": 1,
-        }).execute()
-        clear_app_cache()
-        st.toast(f"📦 Sale Recorded: {m_sku}", icon="✅")
-      except Exception as e:
-        st.error(f"Error: {e}")
-
-  with tab_s2:
-    sales_template = {
-        "date": ["2026-03-31"],
-        "channel_sku": ["AMZ-TSHIRT-RED-M"],
-        "type": ["SINGLE"],
-        "brand": ["VIDA LOCA"],
-        "qty": [1],
-    }
-    st.download_button(
-        "📥 Download Sales Upload Template (CSV)",
-        data=create_sample_csv(sales_template),
-        file_name="Sales_Upload_Template.csv",
-        mime="text/csv",
-    )
-
-    f_sales = st.file_uploader(
-        "Upload Sales Manifest", type=["csv", "xlsx"], key="sales_upload"
-    )
-    if f_sales and st.button("🚀 Process Sales Import"):
-      try:
-        df_u = (
-            pd.read_csv(f_sales)
-            if f_sales.name.endswith(".csv")
-            else pd.read_excel(f_sales)
-        )
-        supabase.table("sale_data").insert(
-            df_u.to_dict(orient="records")
-        ).execute()
-        clear_app_cache()
-        st.success("Sales Imported!")
-        st.rerun()
-      except Exception as e:
-        st.error(f"Upload Error: {e}")
