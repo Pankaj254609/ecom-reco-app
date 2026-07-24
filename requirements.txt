@@ -6,3 +6,4 @@ python-barcode
 qrcode
 pillow
 reportlab
+plotly
