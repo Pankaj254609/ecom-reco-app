@@ -65,14 +65,10 @@ except Exception as e:
   st.error(f"Supabase Client Connection Error: {e}")
 
 
-# --- HELPER: SAMPLE TEMPLATE GENERATOR ---
+# --- HELPER FUNCTIONS ---
 def create_sample_csv(columns_dict):
   df_sample = pd.DataFrame(columns_dict)
   return df_sample.to_csv(index=False).encode("utf-8")
-
-
-def convert_df_to_csv(df):
-  return df.to_csv(index=False).encode("utf-8")
 
 
 def clean_sku(val):
@@ -89,11 +85,11 @@ def sanitize_dataframe_for_json(df):
   return df.astype(object).where(pd.notnull(df), None)
 
 
-# --- CHUNKED BULK INSERT ENGINE (PREVENTS TIMEOUTS) ---
+# --- BATCH UPLOAD ENGINE (PREVENTS TIMEOUTS) ---
 def batch_insert_to_supabase(
     table_name: str, df: pd.DataFrame, chunk_size: int = 500
 ):
-  """Inserts DataFrame in batches/chunks to avoid statement timeout error (code 57014)."""
+  """Inserts DataFrame in batches to avoid statement timeout error (code 57014)."""
   df_sanitized = sanitize_dataframe_for_json(df)
   records = df_sanitized.to_dict(orient="records")
   total_records = len(records)
@@ -116,7 +112,7 @@ def batch_insert_to_supabase(
   status_text.empty()
 
 
-# --- HIGH RESOLUTION BARCODE & QR GENERATOR ---
+# --- BARCODE & QR GENERATOR ---
 def generate_barcode_img(text):
   code128 = barcode.get_barcode_class("code128")
   rv = io.BytesIO()
@@ -150,7 +146,6 @@ def generate_qrcode_img(text):
   return rv
 
 
-# --- PDF GENERATOR ---
 def generate_codes_pdf(sku_qty_dict, code_type="barcode"):
   pdf_buffer = io.BytesIO()
   doc = SimpleDocTemplate(
@@ -173,7 +168,7 @@ def generate_codes_pdf(sku_qty_dict, code_type="barcode"):
     clean_s = str(sku).strip().upper()
     try:
       count = int(qty)
-    except:
+    except Exception:
       count = 1
     expanded_sku_list.extend([clean_s] * max(1, count))
 
@@ -212,30 +207,34 @@ def generate_codes_pdf(sku_qty_dict, code_type="barcode"):
   return pdf_buffer
 
 
-# --- DATA LOAD ENGINE ---
-def fetch_chunk(table_name, start, limit):
-  try:
-    res = (
-        supabase.table(table_name)
-        .select("*")
-        .range(start, start + limit - 1)
-        .execute()
-    )
-    return res.data if res.data else []
-  except:
-    return []
-
-
+# --- DATA LOAD ENGINE WITH PAGINATION LOOP (FETCHES ALL DATA) ---
 @st.cache_data(ttl=300, show_spinner="⚡ Syncing Reconcile Data...")
 def load_data_cached():
 
-  def fetch_all(table_name):
-    try:
-      res = supabase.table(table_name).select("*").execute()
-      return pd.DataFrame(res.data) if res.data else pd.DataFrame()
-    except:
-      return pd.DataFrame()
+  def fetch_all(table_name, chunk_size=1000):
+    """Loop karke saare records fetch karta hai (Default 100 limit bypass)"""
+    all_data = []
+    start = 0
+    while True:
+      try:
+        res = (
+            supabase.table(table_name)
+            .select("*")
+            .range(start, start + chunk_size - 1)
+            .execute()
+        )
+        if not res.data:
+          break
+        all_data.extend(res.data)
+        if len(res.data) < chunk_size:
+          break
+        start += chunk_size
+      except Exception as e:
+        st.error(f"Error fetching {table_name}: {e}")
+        break
+    return pd.DataFrame(all_data) if all_data else pd.DataFrame()
 
+  # 1. Fetch Master SKU Data
   df_p = fetch_all("master_sku")
   if not df_p.empty:
     actual_cols = [
@@ -266,6 +265,7 @@ def load_data_cached():
         "Image URL",
     ][: len(df_p.columns)]
 
+  # 2. Fetch Channel SKU Mapping
   df_m = fetch_all("channel_sku_map")
   if not df_m.empty:
     df_m = df_m.drop(columns=["id", "created_at"], errors="ignore")
@@ -277,6 +277,7 @@ def load_data_cached():
         "BRAND",
     ][: len(df_m.columns)]
 
+  # 3. Fetch Sales Data
   df_sa = fetch_all("sale_data")
   if not df_sa.empty:
     df_sa = df_sa.drop(columns=["created_at"], errors="ignore")
@@ -291,6 +292,7 @@ def load_data_cached():
         }
     )
 
+  # 4. Fetch Inventory Inward Data
   df_st = fetch_all("add_inventory")
   if not df_st.empty:
     df_st = df_st.drop(columns=["created_at"], errors="ignore")
@@ -312,7 +314,6 @@ def clear_app_cache():
   st.cache_data.clear()
 
 
-# --- SMART MASTER SKU RESOLVER ---
 def resolve_to_master_sku(scanned_code, df_master, df_mapping):
   clean_input = clean_sku(scanned_code)
   if not clean_input:
@@ -342,7 +343,7 @@ def resolve_to_master_sku(scanned_code, df_master, df_mapping):
   return clean_input
 
 
-# --- SIDEBAR CONTROL PANEL ---
+# --- SIDEBAR NAVIGATION ---
 st.sidebar.markdown(
     "<h2 style='color:white; text-align:center;'>Learnwell Reconcile Pro</h2>",
     unsafe_allow_html=True,
@@ -412,7 +413,11 @@ if menu == "📊 Live Executive Dashboard":
   c_chart1, c_chart2 = st.columns(2)
 
   with c_chart1:
-    if not df_sales.empty and "Channel SKU" in df_sales.columns and "Qty" in df_sales.columns:
+    if (
+        not df_sales.empty
+        and "Channel SKU" in df_sales.columns
+        and "Qty" in df_sales.columns
+    ):
       df_top_sales = (
           df_sales.groupby("Channel SKU")["Qty"]
           .sum()
@@ -434,9 +439,7 @@ if menu == "📊 Live Executive Dashboard":
 
   with c_chart2:
     if not df_map.empty and "channelName" in df_map.columns:
-      df_chan_dist = (
-          df_map["channelName"].value_counts().reset_index()
-      )
+      df_chan_dist = df_map["channelName"].value_counts().reset_index()
       df_chan_dist.columns = ["Channel", "Count"]
       fig_pie = px.pie(
           df_chan_dist,
@@ -615,6 +618,7 @@ elif menu == "📦 1. MASTER SKU Manager":
   tab_m1, tab_m2 = st.tabs(["📋 View Catalog", "📁 Bulk Upload Master SKUs"])
 
   with tab_m1:
+    st.write(f"Total Loaded Master SKUs: **{len(df_prod)}**")
     st.dataframe(df_prod, use_container_width=True, hide_index=True)
 
   with tab_m2:
@@ -649,7 +653,6 @@ elif menu == "📦 1. MASTER SKU Manager":
             else pd.read_excel(f_master)
         )
 
-        # Batch insert to prevent timeout
         batch_insert_to_supabase("master_sku", df_u)
 
         clear_app_cache()
@@ -667,6 +670,7 @@ elif menu == "🔗 2. CHANNEL SKU Mapping":
   tab_map1, tab_map2 = st.tabs(["📋 Mapped SKUs", "📁 Bulk Mapping Upload"])
 
   with tab_map1:
+    st.write(f"Total Channel Mappings: **{len(df_map)}**")
     st.dataframe(df_map, use_container_width=True, hide_index=True)
 
   with tab_map2:
@@ -695,7 +699,6 @@ elif menu == "🔗 2. CHANNEL SKU Mapping":
             else pd.read_excel(f_map)
         )
 
-        # Batch insert to prevent timeout
         batch_insert_to_supabase("channel_sku_map", df_u)
 
         clear_app_cache()
@@ -772,7 +775,6 @@ elif menu == "📥 3. ADD INVENTORY (Stock Inward)":
             else pd.read_excel(f_inv)
         )
 
-        # Batch insert to prevent timeout
         batch_insert_to_supabase("add_inventory", df_u)
 
         clear_app_cache()
@@ -830,7 +832,6 @@ elif menu == "📤 4. SALES DATA Manifest":
             else pd.read_excel(f_sales)
         )
 
-        # Batch insert to prevent timeout
         batch_insert_to_supabase("sale_data", df_u)
 
         clear_app_cache()
