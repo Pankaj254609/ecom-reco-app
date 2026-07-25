@@ -89,6 +89,33 @@ def sanitize_dataframe_for_json(df):
   return df.astype(object).where(pd.notnull(df), None)
 
 
+# --- CHUNKED BULK INSERT ENGINE (PREVENTS TIMEOUTS) ---
+def batch_insert_to_supabase(
+    table_name: str, df: pd.DataFrame, chunk_size: int = 500
+):
+  """Inserts DataFrame in batches/chunks to avoid statement timeout error (code 57014)."""
+  df_sanitized = sanitize_dataframe_for_json(df)
+  records = df_sanitized.to_dict(orient="records")
+  total_records = len(records)
+
+  progress_bar = st.progress(0.0)
+  status_text = st.empty()
+
+  for i in range(0, total_records, chunk_size):
+    chunk = records[i : i + chunk_size]
+    supabase.table(table_name).insert(chunk).execute()
+
+    progress = min((i + len(chunk)) / total_records, 1.0)
+    progress_bar.progress(progress)
+    status_text.text(
+        f"⏳ Uploading... {min(i + chunk_size, total_records)} / {total_records}"
+        " records processed."
+    )
+
+  progress_bar.empty()
+  status_text.empty()
+
+
 # --- HIGH RESOLUTION BARCODE & QR GENERATOR ---
 def generate_barcode_img(text):
   code128 = barcode.get_barcode_class("code128")
@@ -443,7 +470,6 @@ elif menu == "💰 Payment Settlement Reconciliation":
       ["Amazon", "Flipkart", "Meesho", "Myntra", "Snapdeal"],
   )
 
-  # Template Download
   p_sample = {
       "Order_ID": ["ORD1001", "ORD1002"],
       "Sale_Amount": [1200.0, 850.0],
@@ -479,10 +505,9 @@ elif menu == "💰 Payment Settlement Reconciliation":
       )
       st.dataframe(df_settle, use_container_width=True, hide_index=True)
 
-      # Plotly Visuals for Settlement
       st.write("---")
       st.subheader("📉 Financial Breakdown")
-      
+
       p_col1, p_col2 = st.columns(2)
       with p_col1:
         total_sale = df_settle["Sale_Amount"].sum()
@@ -557,7 +582,7 @@ elif menu == "🚚 Return & Claims Reconciliation":
       st.write("---")
       st.subheader("📊 Return & Claim Breakdown")
       r_col1, r_col2 = st.columns(2)
-      
+
       with r_col1:
         df_claim_summary = df_ret["Claim_Status"].value_counts().reset_index()
         df_claim_summary.columns = ["Status", "Count"]
@@ -623,12 +648,10 @@ elif menu == "📦 1. MASTER SKU Manager":
             if f_master.name.endswith(".csv")
             else pd.read_excel(f_master)
         )
-        # Sanitize NaN values for JSON compatibility
-        df_u = sanitize_dataframe_for_json(df_u)
-        
-        supabase.table("master_sku").insert(
-            df_u.to_dict(orient="records")
-        ).execute()
+
+        # Batch insert to prevent timeout
+        batch_insert_to_supabase("master_sku", df_u)
+
         clear_app_cache()
         st.success("Master SKUs Imported Successfully!")
         st.rerun()
@@ -671,12 +694,10 @@ elif menu == "🔗 2. CHANNEL SKU Mapping":
             if f_map.name.endswith(".csv")
             else pd.read_excel(f_map)
         )
-        # Sanitize NaN values for JSON compatibility
-        df_u = sanitize_dataframe_for_json(df_u)
 
-        supabase.table("channel_sku_map").insert(
-            df_u.to_dict(orient="records")
-        ).execute()
+        # Batch insert to prevent timeout
+        batch_insert_to_supabase("channel_sku_map", df_u)
+
         clear_app_cache()
         st.success("Channel Mapping Updated!")
         st.rerun()
@@ -750,12 +771,10 @@ elif menu == "📥 3. ADD INVENTORY (Stock Inward)":
             if f_inv.name.endswith(".csv")
             else pd.read_excel(f_inv)
         )
-        # Sanitize NaN values for JSON compatibility
-        df_u = sanitize_dataframe_for_json(df_u)
 
-        supabase.table("add_inventory").insert(
-            df_u.to_dict(orient="records")
-        ).execute()
+        # Batch insert to prevent timeout
+        batch_insert_to_supabase("add_inventory", df_u)
+
         clear_app_cache()
         st.success("Stock Added!")
         st.rerun()
@@ -810,12 +829,10 @@ elif menu == "📤 4. SALES DATA Manifest":
             if f_sales.name.endswith(".csv")
             else pd.read_excel(f_sales)
         )
-        # Sanitize NaN values for JSON compatibility
-        df_u = sanitize_dataframe_for_json(df_u)
 
-        supabase.table("sale_data").insert(
-            df_u.to_dict(orient="records")
-        ).execute()
+        # Batch insert to prevent timeout
+        batch_insert_to_supabase("sale_data", df_u)
+
         clear_app_cache()
         st.success("Sales Imported!")
         st.rerun()
